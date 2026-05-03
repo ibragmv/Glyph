@@ -26,7 +26,9 @@ def build_train_transforms(mean: float, std: float) -> A.Compose:
             ),
             A.OneOf(
                 [
-                    A.Perspective(scale=(0.04, 0.10), keep_size=True, fit_output=False, fill=255),
+                    A.Perspective(
+                        scale=(0.04, 0.10), keep_size=True, fit_output=False, fill=255
+                    ),
                     A.GridDistortion(
                         num_steps=5,
                         distort_limit=(-0.22, 0.22),

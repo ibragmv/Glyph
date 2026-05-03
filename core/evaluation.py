@@ -6,20 +6,20 @@ import numpy as np
 import torch
 from sklearn.metrics import classification_report, confusion_matrix
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 
 from core.augmentations import build_eval_transforms
 from core.checkpoints import load_model_checkpoint
+from core.console import create_progress, display_path, print_log, print_summary
 from core.constants import CLASS_NAMES
 from core.datasets import ImperialAramaicDataset
 from core.gradcam import GradCAM, overlay_heatmap
 from core.utils import ensure_dir, format_percent, save_json
 
+
 def collect_predictions(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
-    show_progress: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     all_probs = []
     all_preds = []
@@ -27,7 +27,14 @@ def collect_predictions(
     all_paths: list[str] = []
 
     with torch.no_grad():
-        iterator = tqdm(loader, desc="predict", leave=False) if show_progress else loader
+        iterator = create_progress(
+            loader,
+            command="eval",
+            scope="predict",
+            color="cyan",
+            leave=False,
+            total=len(loader),
+        )
         for images, labels, paths in iterator:
             images = images.to(device, non_blocking=True)
             logits = model(images)
@@ -47,12 +54,22 @@ def collect_predictions(
     )
 
 
-def plot_confusion_matrix(cm: np.ndarray, class_names: list[str], output_path: Path) -> None:
+def plot_confusion_matrix(
+    cm: np.ndarray, class_names: list[str], output_path: Path
+) -> None:
     import matplotlib.pyplot as plt
     import seaborn as sns
 
     fig, ax = plt.subplots(figsize=(12, 10))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="magma", xticklabels=class_names, yticklabels=class_names, ax=ax)
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="magma",
+        xticklabels=class_names,
+        yticklabels=class_names,
+        ax=ax,
+    )
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
     ax.set_title("Confusion Matrix")
@@ -75,7 +92,9 @@ def plot_random_predictions(
     import matplotlib.pyplot as plt
 
     rng = np.random.default_rng(seed)
-    indices = rng.choice(len(dataset), size=min(num_samples, len(dataset)), replace=False)
+    indices = rng.choice(
+        len(dataset), size=min(num_samples, len(dataset)), replace=False
+    )
     fig, axes = plt.subplots(3, 4, figsize=(12, 9))
     axes = axes.flatten()
 
@@ -150,7 +169,6 @@ def evaluate_model(
     batch_size: int = 128,
     num_workers: int = 0,
     seed: int = 42,
-    show_progress: bool = False,
 ) -> dict:
     ensure_dir(output_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,8 +190,16 @@ def evaluate_model(
         pin_memory=torch.cuda.is_available(),
     )
 
-    print(f"[eval] device={device.type} | samples={len(dataset)}")
-    probs, preds, labels, paths = collect_predictions(model, loader, device, show_progress=show_progress)
+    print_summary(
+        "Evaluation Run",
+        [
+            ("device", device.type),
+            ("samples", len(dataset)),
+            ("checkpoint", display_path(checkpoint_path)),
+            ("output", display_path(output_dir)),
+        ],
+    )
+    probs, preds, labels, paths = collect_predictions(model, loader, device)
     cm = confusion_matrix(labels, preds, labels=list(range(len(CLASS_NAMES))))
     report = classification_report(
         labels,
@@ -213,7 +239,11 @@ def evaluate_model(
         },
     )
     accuracy = float((preds == labels).mean())
-    print(f"[eval] accuracy={format_percent(accuracy)} | report={output_dir / 'classification_report.json'}")
+    print_log(
+        "eval",
+        f"accuracy {format_percent(accuracy)} | report {display_path(output_dir / 'classification_report.json')}",
+        tone="success",
+    )
     return {
         "device": device.type,
         "accuracy": accuracy,

@@ -44,11 +44,15 @@ class ImperialAramaicResNet18(nn.Module):
             )
             if pretrained:
                 with torch.no_grad():
-                    new_conv.weight.copy_(original_conv.weight.mean(dim=1, keepdim=True))
+                    new_conv.weight.copy_(
+                        original_conv.weight.mean(dim=1, keepdim=True)
+                    )
             model.conv1 = new_conv
 
         in_features = model.fc.in_features
-        model.fc = nn.Sequential(nn.Dropout(p=dropout), nn.Linear(in_features, num_classes))
+        model.fc = nn.Sequential(
+            nn.Dropout(p=dropout), nn.Linear(in_features, num_classes)
+        )
         self.model = model
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -71,4 +75,3 @@ def build_model(
         pretrained=pretrained,
         small_image_stem=small_image_stem,
     )
-

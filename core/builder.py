@@ -45,7 +45,9 @@ def build_binary(
     python_executable: Path | None = None,
     project_root: Path | None = None,
 ) -> Path:
-    resolved_project_root = (project_root or Path(__file__).resolve().parent.parent).resolve()
+    resolved_project_root = (
+        project_root or Path(__file__).resolve().parent.parent
+    ).resolve()
     resolved_output_path = output_path.resolve()
     selected_python = (python_executable or Path(sys.executable)).expanduser()
     resolved_python = selected_python.resolve()

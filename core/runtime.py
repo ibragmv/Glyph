@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import importlib
 import os
 import warnings
 from contextlib import redirect_stderr, redirect_stdout
@@ -25,7 +26,7 @@ def configure_runtime() -> None:
 
 def prepare_matplotlib() -> None:
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        import matplotlib  # noqa: F401
+        importlib.import_module("matplotlib")
         from matplotlib import font_manager
 
         font_manager.findSystemFonts()

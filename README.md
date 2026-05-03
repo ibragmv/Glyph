@@ -1,63 +1,61 @@
 # Glyph
 
-Glyph is a local CLI toolkit for classifying printed Imperial Aramaic letters.
+Glyph is a local CLI toolkit for classifying printed Imperial Aramaic letters from grayscale images.
 
-The project includes the full pipeline:
+It covers the full workflow:
 
 - synthetic dataset generation
 - model training
 - checkpoint evaluation
-- single-image inference
+- single-image inference on new samples
 
-It is designed as a compact research and experimentation project: generate glyph images, train a classifier, inspect evaluation outputs, and run predictions on new samples from the command line.
+The project is built for experimentation with Imperial Aramaic character classification when a large real labeled dataset is not yet available. It generates synthetic glyph images, trains a CNN classifier, evaluates checkpoints, and lets you test the model on your own external images.
 
-## What The Project Does
+## What This Project Is
 
-Glyph trains a neural network to recognize printed Imperial Aramaic characters from grayscale images.
+At a high level, Glyph is a printed-letter classifier for Imperial Aramaic.
 
-The current workflow is built around synthetic data. The generator renders glyphs from Imperial Aramaic fonts and applies scan-like distortions such as blur, background texture, corruption, geometric warping, and split-specific difficulty. This makes it possible to train a classifier without first hand-labeling a large real dataset.
+The current dataset pipeline is synthetic-first:
 
-The project is useful if you want to:
+- glyphs are rendered from Imperial Aramaic fonts
+- scan-like corruption is added: blur, texture, background noise, geometric distortions, damage
+- training and validation splits use different difficulty profiles
 
-- experiment with Imperial Aramaic OCR-style classification
-- train a compact image classifier on glyph crops
-- benchmark synthetic train/validation splits
-- inspect prediction quality with confusion matrices and Grad-CAM visualizations
+This means the model can be trained without manually annotating thousands of real images first.
 
-## What You Get
+## What The Commands Mean
 
-After setup, the project provides a single local command:
+The project exposes one main command after build:
 
 ```bash
 ./glyph
 ```
 
-That command supports:
+Available subcommands:
 
 - `data` - generate a synthetic dataset
-- `train` - train the classifier
-- `eval` - evaluate a checkpoint on the validation split
-- `infer` - predict a single image
+- `train` - train the classifier on `dataset/train`
+- `eval` - evaluate a checkpoint on `dataset/val`
+- `infer` - run prediction on one image
+
+The normal sequence is:
+
+1. `data`
+2. `train`
+3. `eval`
+4. `infer` on your own images
 
 ## Quick Start
 
 ### 1. Prepare the environment
 
-Create the virtual environment and install dependencies:
-
 ```bash
 ./scripts/startup.sh
 ```
 
-What this does:
-
-- creates `.venv/` if needed
-- installs packages from `requirements.txt`
-- skips reinstalling dependencies if nothing changed
+This creates `.venv/`, installs dependencies, and skips reinstalling them if nothing changed.
 
 ### 2. Build the launcher
-
-Build the local executable:
 
 ```bash
 make glyph
@@ -66,19 +64,19 @@ make glyph
 This creates:
 
 - `./glyph` - executable launcher
-- `./.glyph/` - copied runtime package used by the launcher
+- `./.glyph/` - copied runtime used by the launcher
 
-If `.venv` is recreated, run `make glyph` again.
+If you recreate `.venv`, run `make glyph` again.
 
-### 3. Generate a dataset
+### 3. Generate the dataset
 
-Generate the default dataset:
+Default dataset:
 
 ```bash
 ./glyph data --output-dir dataset
 ```
 
-If you want a harder validation split:
+Harder validation split:
 
 ```bash
 ./glyph data --output-dir dataset --train-hardness 1.0 --val-hardness 1.45
@@ -90,15 +88,12 @@ This writes:
 - `dataset/val/...`
 - `dataset/metadata.json`
 
-By default:
+Default counts:
 
-- `train` contains `1200` images per class
-- `val` contains `300` images per class
-- the validation split is intentionally harder than the training split
+- `1200` training images per class
+- `300` validation images per class
 
 ### 4. Train the model
-
-Train a classifier on the generated dataset:
 
 ```bash
 ./glyph train --data-dir dataset --output-dir artifacts
@@ -111,17 +106,7 @@ Typical outputs:
 - `artifacts/history.json`
 - `artifacts/training_curves.png`
 
-Useful optional flags:
-
-```bash
-./glyph train --data-dir dataset --output-dir artifacts --epochs 30 --batch-size 128 --lr 1e-3
-./glyph train --data-dir dataset --output-dir artifacts --pretrained
-./glyph train --data-dir dataset --output-dir artifacts --progress
-```
-
-### 5. Evaluate the checkpoint
-
-Run evaluation on the validation split:
+### 5. Evaluate the model
 
 ```bash
 ./glyph eval --data-dir dataset --checkpoint artifacts/best_model.pt
@@ -134,19 +119,55 @@ This writes:
 - `artifacts/eval/random_predictions.png`
 - `artifacts/eval/gradcam_examples.png`
 
-### 6. Run inference on one image
-
-Predict a single image:
+### 6. Test on your own image
 
 ```bash
 ./glyph infer --checkpoint artifacts/best_model.pt --image path/to/sample.png
 ```
 
-The command prints the top predicted classes with confidence scores.
+This prints top predictions and confidence scores.
+
+## How To Test On External Images
+
+If you have images from a teacher, colleague, paper, archive, or your own scans, do not put them into `dataset/train` or `dataset/val` unless you explicitly want to rebuild the training pipeline around them.
+
+The simplest workflow is:
+
+1. Keep external images in a separate folder, for example `teacher_test/`
+2. Train your model normally on synthetic data
+3. Run `infer` on each external image
+4. Compare predictions with the true labels manually
+
+Example for one image:
+
+```bash
+./glyph infer --checkpoint artifacts/best_model.pt --image teacher_test/sample_01.png
+```
+
+Example for many images:
+
+```bash
+for f in teacher_test/*; do
+  echo "== $f =="
+  ./glyph infer --checkpoint artifacts/best_model.pt --image "$f"
+done
+```
+
+How to interpret this:
+
+- if `eval` is very high and external images also work well, the model is genuinely useful
+- if `eval` is very high but external images fail, synthetic validation is still overestimating real performance
+- if confidence is high on wrong answers, the model is confidently miscalibrated for your external domain
+
+Recommended manual protocol:
+
+1. Take 20-50 external images
+2. Write down the true label for each image
+3. Run `infer` on all of them
+4. Record `file | true_label | predicted_label | confidence`
+5. Compute your real external accuracy separately from synthetic validation accuracy
 
 ## Full Example
-
-Minimal end-to-end flow:
 
 ```bash
 ./scripts/startup.sh
@@ -157,46 +178,141 @@ make glyph
 ./glyph infer --checkpoint artifacts/best_model.pt --image path/to/sample.png
 ```
 
-## Project Structure
+## Outputs
 
-Source files:
+### `dataset/`
 
-- `core/` - main application code
-- `scripts/startup.sh` - environment bootstrap
-- `scripts/build.py` - launcher build entrypoint
-- `Makefile` - setup and cleanup commands
-- `fonts/` - local Imperial Aramaic font assets
+Generated synthetic data:
 
-Generated files:
+- `dataset/train/` - training split
+- `dataset/val/` - validation split
+- `dataset/metadata.json` - generation metadata
 
-- `dataset/` - generated synthetic images and metadata
-- `artifacts/` - model checkpoints and evaluation outputs
-- `.glyph/` - generated launcher runtime
-- `glyph` - generated executable launcher
+### `artifacts/`
 
-## Dataset Generation Notes
+Training and evaluation outputs:
 
-The synthetic generator uses split-specific difficulty instead of producing nearly identical train and validation distributions.
-
-In practice this means:
-
-- `train` is augmented to improve robustness
-- `val` is harder and more scan-like
-- when more than one font is available, part of the font set can be held out for validation
-
-The generated metadata file records:
-
-- class list
-- image counts
-- font paths
-- split-specific font allocation
-- hardness settings
-
-## Artifacts Notes
+- `best_model.pt` - checkpoint with best validation accuracy
+- `last_model.pt` - most recent checkpoint
+- `history.json` - training metrics history
+- `training_curves.png` - loss and accuracy curves
+- `eval/` - evaluation reports and visualizations
 
 `artifacts/` is generated output, not source code.
 
-In the current workspace it contains large checkpoint files, so treat it as disposable unless you want to keep the trained weights.
+## Command Reference
+
+### `./glyph data`
+
+Generates the synthetic dataset.
+
+Example:
+
+```bash
+./glyph data --output-dir dataset
+```
+
+Flags:
+
+- `--output-dir` - where to write the dataset. Default: `dataset`
+- `--train-per-class` - number of training images per class. Default: `1200`
+- `--val-per-class` - number of validation images per class. Default: `300`
+- `--canvas-size` - internal render canvas size before final resize. Default: `128`
+- `--output-size` - final saved image size. Default: `64`
+- `--seed` - random seed for reproducibility. Default: `42`
+- `--font` - explicit font path. Can be passed multiple times. Default: none
+- `--font-dir` - extra directory to search for fonts. Can be passed multiple times. Default: none
+- `--train-hardness` - corruption severity for training images. Default: `0.95`
+- `--val-hardness` - corruption severity for validation images. Default: `1.35`
+- `--holdout-font-fraction` - fraction of fonts held out for validation when multiple fonts are available. Default: `0.35`
+- `--progress` - show progress bars. Default: off
+
+### `./glyph train`
+
+Trains the classifier on `dataset/train` and validates on `dataset/val`.
+
+Example:
+
+```bash
+./glyph train --data-dir dataset --output-dir artifacts
+```
+
+Flags:
+
+- `--data-dir` - dataset root containing `train/` and `val/`. Default: `dataset`
+- `--output-dir` - where to save checkpoints and training artifacts. Default: `artifacts`
+- `--epochs` - number of training epochs. Default: `30`
+- `--batch-size` - batch size. Default: `128`
+- `--lr` - learning rate. Default: `1e-3`
+- `--num-workers` - DataLoader workers. Default: `0`
+- `--seed` - random seed. Default: `42`
+- `--pretrained` - initialize ResNet-18 from pretrained weights. Default: off
+- `--no-small-image-stem` - disable the small-image input stem optimization. Default: off
+- `--progress` - show progress bars. Default: off
+
+Defaults that matter:
+
+- if `--pretrained` is not passed, training starts without pretrained weights
+- if `--no-small-image-stem` is not passed, the small-image stem stays enabled
+- output goes to `artifacts/` unless you override it
+
+### `./glyph eval`
+
+Evaluates a checkpoint on the validation split and writes reports to `artifacts/eval` by default.
+
+Example:
+
+```bash
+./glyph eval --data-dir dataset --checkpoint artifacts/best_model.pt
+```
+
+Flags:
+
+- `--data-dir` - dataset root used for validation. Default: `dataset`
+- `--checkpoint` - checkpoint file to evaluate. Required
+- `--output-dir` - where to save evaluation outputs. Default: `artifacts/eval`
+- `--batch-size` - evaluation batch size. Default: `128`
+- `--num-workers` - DataLoader workers. Default: `0`
+- `--seed` - seed used for random prediction examples. Default: `42`
+- `--progress` - show progress bars. Default: off
+
+Important:
+
+- `eval` runs after `train`, not directly after `data`
+- `eval` needs both the dataset and a trained checkpoint
+
+### `./glyph infer`
+
+Runs prediction for one image.
+
+Example:
+
+```bash
+./glyph infer --checkpoint artifacts/best_model.pt --image teacher_test/sample_01.png
+```
+
+Flags:
+
+- `--checkpoint` - checkpoint file to load. Required
+- `--image` - image file to classify. Required
+- `--top-k` - number of top predictions to print. Default: `3`
+
+Use `infer` when:
+
+- you want to test the model on external images
+- you want to inspect one image at a time
+- you want to compare model behavior on synthetic vs real samples
+
+## Project Structure
+
+- `core/` - application code
+- `scripts/startup.sh` - environment bootstrap
+- `scripts/build.py` - launcher build step
+- `fonts/` - Imperial Aramaic font files
+- `dataset/` - generated synthetic data
+- `artifacts/` - generated checkpoints and evaluation reports
+- `.glyph/` - generated runtime for the launcher
+- `glyph` - generated executable launcher
 
 ## Cleanup
 
@@ -206,7 +322,7 @@ Remove only the launcher and local runtime:
 make clean
 ```
 
-Remove generated checkpoints and evaluation outputs:
+Remove generated checkpoints and evaluation output:
 
 ```bash
 make clean-artifacts

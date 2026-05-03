@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Iterable
 
 import numpy as np
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
-from tqdm import tqdm
 
+from core.console import create_progress, write_progress_line
 from core.constants import (
     CODEPOINTS,
     DEFAULT_FONT_CANDIDATES,
@@ -51,7 +51,9 @@ def font_supports_codepoints(font_path: Path, codepoints: Iterable[int]) -> bool
     return all(codepoint in cmap for codepoint in codepoints)
 
 
-def discover_fonts(explicit_fonts: Iterable[Path], extra_font_dirs: Iterable[Path]) -> list[Path]:
+def discover_fonts(
+    explicit_fonts: Iterable[Path], extra_font_dirs: Iterable[Path]
+) -> list[Path]:
     candidates: list[Path] = []
 
     for font_path in explicit_fonts:
@@ -104,11 +106,15 @@ def _center_by_mass(image: Image.Image) -> Image.Image:
     if shift_x > 0:
         translated.paste(0, (0, 0, shift_x, translated.height))
     elif shift_x < 0:
-        translated.paste(0, (translated.width + shift_x, 0, translated.width, translated.height))
+        translated.paste(
+            0, (translated.width + shift_x, 0, translated.width, translated.height)
+        )
     if shift_y > 0:
         translated.paste(0, (0, 0, translated.width, shift_y))
     elif shift_y < 0:
-        translated.paste(0, (0, translated.height + shift_y, translated.width, translated.height))
+        translated.paste(
+            0, (0, translated.height + shift_y, translated.width, translated.height)
+        )
     return translated
 
 
@@ -145,13 +151,24 @@ def _paper_background(
     width, height = size
     y_grid, x_grid = np.mgrid[0:height, 0:width].astype(np.float32)
     paper_level = float(rng.uniform(184.0, 242.0))
-    coarse = _sample_noise_map(size, rng, min_grid=4, max_grid=9) * float(rng.uniform(14.0, 34.0)) * severity
-    medium = _sample_noise_map(size, rng, min_grid=10, max_grid=18) * float(rng.uniform(6.0, 18.0)) * severity
-    fine = rng.normal(0.0, float(rng.uniform(1.5, 5.0)) * severity, size=(height, width))
+    coarse = (
+        _sample_noise_map(size, rng, min_grid=4, max_grid=9)
+        * float(rng.uniform(14.0, 34.0))
+        * severity
+    )
+    medium = (
+        _sample_noise_map(size, rng, min_grid=10, max_grid=18)
+        * float(rng.uniform(6.0, 18.0))
+        * severity
+    )
+    fine = rng.normal(
+        0.0, float(rng.uniform(1.5, 5.0)) * severity, size=(height, width)
+    )
 
     angle = float(rng.uniform(0.0, np.pi))
     gradient = (
-        np.cos(angle) * (x_grid - (width / 2.0)) + np.sin(angle) * (y_grid - (height / 2.0))
+        np.cos(angle) * (x_grid - (width / 2.0))
+        + np.sin(angle) * (y_grid - (height / 2.0))
     ) / max(width, height)
     gradient *= float(rng.uniform(24.0, 54.0)) * severity
 
@@ -177,8 +194,14 @@ def _draw_glyph_mask(
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
     jitter = 5.0 + (2.5 * severity)
-    offset_x = (config.canvas_size - width) / 2 - bbox[0] + float(rng.uniform(-jitter, jitter))
-    offset_y = (config.canvas_size - height) / 2 - bbox[1] + float(rng.uniform(-jitter, jitter))
+    offset_x = (
+        (config.canvas_size - width) / 2 - bbox[0] + float(rng.uniform(-jitter, jitter))
+    )
+    offset_y = (
+        (config.canvas_size - height) / 2
+        - bbox[1]
+        + float(rng.uniform(-jitter, jitter))
+    )
 
     draw.text(
         (offset_x, offset_y),
@@ -191,9 +214,13 @@ def _draw_glyph_mask(
     return canvas
 
 
-def _random_affine(image: Image.Image, rng: np.random.Generator, severity: float) -> Image.Image:
+def _random_affine(
+    image: Image.Image, rng: np.random.Generator, severity: float
+) -> Image.Image:
     shear = float(rng.uniform(-0.10, 0.10)) * severity
-    scale = float(rng.uniform(max(0.72, 0.96 - 0.10 * severity), 1.04 + 0.08 * severity))
+    scale = float(
+        rng.uniform(max(0.72, 0.96 - 0.10 * severity), 1.04 + 0.08 * severity)
+    )
     tx = float(rng.uniform(-4.0 - 3.5 * severity, 4.0 + 3.5 * severity))
     ty = float(rng.uniform(-4.0 - 3.5 * severity, 4.0 + 3.5 * severity))
     matrix = (scale, shear, tx, shear, scale, ty)
@@ -206,7 +233,9 @@ def _random_affine(image: Image.Image, rng: np.random.Generator, severity: float
     )
 
 
-def _random_quad(image: Image.Image, rng: np.random.Generator, severity: float) -> Image.Image:
+def _random_quad(
+    image: Image.Image, rng: np.random.Generator, severity: float
+) -> Image.Image:
     width, height = image.size
     warp = 6.0 + (5.0 * severity)
     quad = [
@@ -228,7 +257,9 @@ def _random_quad(image: Image.Image, rng: np.random.Generator, severity: float) 
     )
 
 
-def _apply_mask_damage(image: Image.Image, rng: np.random.Generator, severity: float, split: str) -> Image.Image:
+def _apply_mask_damage(
+    image: Image.Image, rng: np.random.Generator, severity: float, split: str
+) -> Image.Image:
     working = image
 
     if rng.random() < (0.45 if split == "train" else 0.70):
@@ -238,7 +269,9 @@ def _apply_mask_damage(image: Image.Image, rng: np.random.Generator, severity: f
         filter_size = 3 if rng.random() < 0.7 else 5
         working = working.filter(ImageFilter.MinFilter(size=filter_size))
     if rng.random() < (0.30 if split == "train" else 0.55):
-        working = working.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(0.35, 1.20) * severity)))
+        working = working.filter(
+            ImageFilter.GaussianBlur(radius=float(rng.uniform(0.35, 1.20) * severity))
+        )
 
     draw = ImageDraw.Draw(working)
     dropout_count = int(rng.integers(0, 2 + int(np.ceil(2.0 * severity))))
@@ -249,7 +282,9 @@ def _apply_mask_damage(image: Image.Image, rng: np.random.Generator, severity: f
         y0 = int(rng.integers(0, max(1, working.height - 8)))
         w = int(rng.integers(4, int(14 + 10 * severity)))
         h = int(rng.integers(4, int(14 + 10 * severity)))
-        draw.rectangle((x0, y0, min(working.width, x0 + w), min(working.height, y0 + h)), fill=0)
+        draw.rectangle(
+            (x0, y0, min(working.width, x0 + w), min(working.height, y0 + h)), fill=0
+        )
 
     if rng.random() < (0.25 if split == "train" else 0.60):
         margin = int(rng.integers(3, int(12 + 8 * severity)))
@@ -257,11 +292,15 @@ def _apply_mask_damage(image: Image.Image, rng: np.random.Generator, severity: f
         if side == 0:
             draw.rectangle((0, 0, margin, working.height), fill=0)
         elif side == 1:
-            draw.rectangle((working.width - margin, 0, working.width, working.height), fill=0)
+            draw.rectangle(
+                (working.width - margin, 0, working.width, working.height), fill=0
+            )
         elif side == 2:
             draw.rectangle((0, 0, working.width, margin), fill=0)
         else:
-            draw.rectangle((0, working.height - margin, working.width, working.height), fill=0)
+            draw.rectangle(
+                (0, working.height - margin, working.width, working.height), fill=0
+            )
 
     return working
 
@@ -290,7 +329,9 @@ def _render_stains(
             fill=strength,
         )
 
-    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(3.0, 8.0) * severity)))
+    overlay = overlay.filter(
+        ImageFilter.GaussianBlur(radius=float(rng.uniform(3.0, 8.0) * severity))
+    )
     return np.asarray(overlay, dtype=np.float32)
 
 
@@ -304,7 +345,11 @@ def _compose_scan(
     paper = _paper_background(glyph_mask.size, rng, severity)
     glyph = np.asarray(glyph_mask, dtype=np.float32) / 255.0
     ink_strength = float(rng.uniform(92.0, 178.0)) * (0.90 + 0.18 * severity)
-    ink_texture = 1.0 + (_sample_noise_map(glyph_mask.size, rng, 8, 18) * float(rng.uniform(0.08, 0.28)) * severity)
+    ink_texture = 1.0 + (
+        _sample_noise_map(glyph_mask.size, rng, 8, 18)
+        * float(rng.uniform(0.08, 0.28))
+        * severity
+    )
     composed = paper - (glyph * ink_strength * ink_texture)
 
     if rng.random() < (0.40 if split == "train" else 0.75):
@@ -323,11 +368,19 @@ def _compose_scan(
     else:
         composed -= stains * float(rng.uniform(0.15, 0.55))
 
-    row_noise = rng.normal(0.0, float(rng.uniform(0.6, 2.8)) * severity, size=(glyph_mask.height, 1))
-    col_noise = rng.normal(0.0, float(rng.uniform(0.6, 2.2)) * severity, size=(1, glyph_mask.width))
+    row_noise = rng.normal(
+        0.0, float(rng.uniform(0.6, 2.8)) * severity, size=(glyph_mask.height, 1)
+    )
+    col_noise = rng.normal(
+        0.0, float(rng.uniform(0.6, 2.2)) * severity, size=(1, glyph_mask.width)
+    )
     composed += row_noise + col_noise
 
-    speckles = rng.normal(0.0, float(rng.uniform(1.2, 5.8)) * severity, size=(glyph_mask.height, glyph_mask.width))
+    speckles = rng.normal(
+        0.0,
+        float(rng.uniform(1.2, 5.8)) * severity,
+        size=(glyph_mask.height, glyph_mask.width),
+    )
     composed += speckles
 
     composed = np.clip(composed, 0.0, 255.0)
@@ -338,13 +391,19 @@ def _compose_scan(
         down_w = max(18, int(round(image.width * downscale_factor)))
         down_h = max(18, int(round(image.height * downscale_factor)))
         image = image.resize((down_w, down_h), resample=RESAMPLE_BILINEAR)
-        image = image.resize((config.canvas_size, config.canvas_size), resample=RESAMPLE_BILINEAR)
+        image = image.resize(
+            (config.canvas_size, config.canvas_size), resample=RESAMPLE_BILINEAR
+        )
 
     if rng.random() < (0.40 if split == "train" else 0.72):
-        image = image.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(0.25, 1.70) * severity)))
+        image = image.filter(
+            ImageFilter.GaussianBlur(radius=float(rng.uniform(0.25, 1.70) * severity))
+        )
 
     contrast = float(rng.uniform(max(0.45, 1.02 - 0.40 * severity), 1.05))
-    brightness = float(rng.uniform(max(0.70, 1.00 - 0.18 * severity), 1.06 + 0.06 * severity))
+    brightness = float(
+        rng.uniform(max(0.70, 1.00 - 0.18 * severity), 1.06 + 0.06 * severity)
+    )
     image = ImageEnhance.Contrast(image).enhance(contrast)
     image = ImageEnhance.Brightness(image).enhance(brightness)
     return image
@@ -373,7 +432,9 @@ def render_symbol(
     glyph_mask = _center_by_mass(glyph_mask)
 
     image = _compose_scan(glyph_mask, config, rng, severity, split)
-    image = image.resize((config.output_size, config.output_size), resample=RESAMPLE_LANCZOS)
+    image = image.resize(
+        (config.output_size, config.output_size), resample=RESAMPLE_LANCZOS
+    )
     return image
 
 
@@ -397,13 +458,13 @@ def _split_fonts_for_domains(
 
 def build_dataset(
     config: DataGenConfig,
-    show_progress: bool = False,
-    logger: Optional[Callable[[str], None]] = None,
 ) -> dict:
     seed_everything(config.seed)
     rng = np.random.default_rng(config.seed)
     font_paths = discover_fonts(config.explicit_fonts, config.extra_font_dirs)
-    split_fonts = _split_fonts_for_domains(font_paths, rng, config.holdout_font_fraction)
+    split_fonts = _split_fonts_for_domains(
+        font_paths, rng, config.holdout_font_fraction
+    )
 
     total_per_class = config.train_per_class + config.val_per_class
     total_images = total_per_class * len(IMPERIAL_ARAMAIC_SYMBOLS)
@@ -411,23 +472,23 @@ def build_dataset(
         for label_dir in LABEL_DIRS.values():
             ensure_dir(config.output_dir / split / label_dir)
 
-    if logger is not None:
-        logger(
-            f"[data] output={config.output_dir} | classes={len(IMPERIAL_ARAMAIC_SYMBOLS)} | "
-            f"images={total_images} | fonts={len(font_paths)} | "
-            f"train_hardness={config.train_hardness:.2f} | val_hardness={config.val_hardness:.2f}"
-        )
-
-    for symbol in IMPERIAL_ARAMAIC_SYMBOLS:
+    total_symbols = len(IMPERIAL_ARAMAIC_SYMBOLS)
+    overall_progress = create_progress(
+        command="data",
+        scope="render",
+        color="green",
+        leave=True,
+        total=total_images,
+    )
+    overall_progress.set_postfix_str(f"ready 0/{total_symbols}")
+    overall_progress.refresh()
+    for symbol_idx, symbol in enumerate(IMPERIAL_ARAMAIC_SYMBOLS, start=1):
         label_dir = LABEL_DIRS[symbol["index"]]
-        iterator = (
-            tqdm(range(total_per_class), desc=f"Generating {label_dir}", leave=False)
-            if show_progress
-            else range(total_per_class)
-        )
-        for sample_idx in iterator:
+        for sample_idx in range(total_per_class):
             split = "train" if sample_idx < config.train_per_class else "val"
-            split_idx = sample_idx if split == "train" else sample_idx - config.train_per_class
+            split_idx = (
+                sample_idx if split == "train" else sample_idx - config.train_per_class
+            )
             split_font_paths = split_fonts[split] or font_paths
             image = render_symbol(
                 symbol_char=symbol["char"],
@@ -443,8 +504,19 @@ def build_dataset(
                 / f"{label_dir}_{split_idx:04d}.png"
             )
             image.save(output_path)
-        if logger is not None and not show_progress:
-            logger(f"[data] generated {label_dir} ({total_per_class} images)")
+            overall_progress.update(1)
+            overall_progress.set_postfix_str(
+                f"ready {symbol_idx - 1}/{total_symbols} | current {label_dir} | split {split}",
+                refresh=False,
+            )
+
+        ready_line = (
+            f"data ready {label_dir} | letters {symbol_idx}/{total_symbols} | images {total_per_class}"
+        )
+        write_progress_line(overall_progress, ready_line)
+
+    overall_progress.set_postfix_str(f"ready {total_symbols}/{total_symbols}")
+    overall_progress.close()
 
     metadata = {
         "unicode_range": ["U+10840", "U+10855"],

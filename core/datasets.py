@@ -10,7 +10,9 @@ from core.constants import IMPERIAL_ARAMAIC_SYMBOLS, LABEL_DIRS
 
 
 class ImperialAramaicDataset(Dataset):
-    def __init__(self, root: Path, split: str, transform=None, return_paths: bool = False) -> None:
+    def __init__(
+        self, root: Path, split: str, transform=None, return_paths: bool = False
+    ) -> None:
         self.root = Path(root)
         self.split = split
         self.transform = transform

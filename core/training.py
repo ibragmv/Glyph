@@ -8,9 +8,15 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 
 from core.augmentations import build_eval_transforms, build_train_transforms
+from core.console import (
+    create_progress,
+    display_path,
+    print_log,
+    print_summary,
+    write_progress_line,
+)
 from core.constants import CLASS_NAMES
 from core.datasets import ImperialAramaicDataset
 from core.models import build_model
@@ -74,7 +80,10 @@ def run_epoch(
     optimizer: Optional[Adam] = None,
     scheduler: Optional[OneCycleLR] = None,
     scaler: Optional[torch.amp.GradScaler] = None,
-    show_progress: bool = False,
+    overall_progress=None,
+    epoch_progress=None,
+    total_epochs: int = 1,
+    epoch_index: int = 1,
 ) -> tuple[float, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -83,8 +92,7 @@ def run_epoch(
     running_correct = 0
     sample_count = 0
 
-    iterator = tqdm(loader, leave=False, desc="train" if is_train else "val") if show_progress else loader
-    for images, labels in iterator:
+    for images, labels in loader:
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
@@ -110,10 +118,28 @@ def run_epoch(
         running_correct += int((predictions == labels).sum().item())
         sample_count += batch_size
 
-        if show_progress:
-            iterator.set_postfix(
-                loss=f"{running_loss / max(sample_count, 1):.4f}",
-                acc=f"{running_correct / max(sample_count, 1):.4f}",
+        if overall_progress is not None:
+            stage = "train" if is_train else "val"
+            overall_progress.update(1)
+            overall_progress.set_postfix_str(
+                (
+                    f"epoch {epoch_index}/{total_epochs} | "
+                    f"stage {stage} | "
+                    f"loss {running_loss / max(sample_count, 1):.4f} | "
+                    f"acc {format_percent(running_correct / max(sample_count, 1))}"
+                ),
+                refresh=False,
+            )
+        if epoch_progress is not None:
+            stage = "train" if is_train else "val"
+            epoch_progress.update(1)
+            epoch_progress.set_postfix_str(
+                (
+                    f"stage {stage} | "
+                    f"loss {running_loss / max(sample_count, 1):.4f} | "
+                    f"acc {format_percent(running_correct / max(sample_count, 1))}"
+                ),
+                refresh=False,
             )
 
     return running_loss / sample_count, running_correct / sample_count
@@ -184,7 +210,6 @@ def train_model(
     seed: int = 42,
     pretrained: bool = False,
     small_image_stem: bool = True,
-    show_progress: bool = False,
 ) -> dict:
     seed_everything(seed)
     ensure_dir(output_dir)
@@ -228,14 +253,42 @@ def train_model(
     best_val_acc = 0.0
     best_path = output_dir / "best_model.pt"
     last_path = output_dir / "last_model.pt"
+    total_steps = epochs * (len(train_loader) + len(val_loader))
 
-    print(
-        f"[train] device={device.type} | train={len(train_loader.dataset)} | val={len(val_loader.dataset)} | "
-        f"pretrained={'on' if pretrained else 'off'}"
+    print_summary(
+        "Training Run",
+        [
+            ("device", device.type),
+            ("train", len(train_loader.dataset)),
+            ("val", len(val_loader.dataset)),
+            ("pretrained", "on" if pretrained else "off"),
+            ("output", display_path(output_dir)),
+            ("mean", f"{mean:.4f}"),
+            ("std", f"{std:.4f}"),
+        ],
     )
-    print(f"[train] normalize mean={mean:.4f} std={std:.4f}")
+    overall_progress = create_progress(
+        command="train",
+        scope="fit",
+        color="green",
+        leave=True,
+        total=total_steps,
+        position=0,
+    )
+    overall_progress.set_postfix_str(f"epoch 0/{epochs}")
+    overall_progress.refresh()
 
     for epoch in range(1, epochs + 1):
+        epoch_progress = create_progress(
+            command="train",
+            scope=f"epoch {epoch:02d}",
+            color="green",
+            leave=False,
+            total=len(train_loader) + len(val_loader),
+            position=1,
+        )
+        epoch_progress.set_postfix_str("stage train")
+        epoch_progress.refresh()
         train_loss, train_acc = run_epoch(
             model=model,
             loader=train_loader,
@@ -244,14 +297,20 @@ def train_model(
             optimizer=optimizer,
             scheduler=scheduler,
             scaler=scaler,
-            show_progress=show_progress,
+            overall_progress=overall_progress,
+            epoch_progress=epoch_progress,
+            total_epochs=epochs,
+            epoch_index=epoch,
         )
         val_loss, val_acc = run_epoch(
             model=model,
             loader=val_loader,
             criterion=criterion,
             device=device,
-            show_progress=show_progress,
+            overall_progress=overall_progress,
+            epoch_progress=epoch_progress,
+            total_epochs=epochs,
+            epoch_index=epoch,
         )
 
         history["train_loss"].append(format_float(train_loss))
@@ -260,12 +319,31 @@ def train_model(
         history["val_acc"].append(format_float(val_acc))
 
         next_best_val_acc = max(best_val_acc, val_acc)
-        print(
-            f"[train] epoch {epoch:02d}/{epochs} | "
-            f"train_loss={train_loss:.4f} | train_acc={format_percent(train_acc)} | "
-            f"val_loss={val_loss:.4f} | val_acc={format_percent(val_acc)} | "
-            f"best={format_percent(next_best_val_acc)}"
+        print_log(
+            "train",
+            (
+                f"epoch {epoch:02d}/{epochs} | "
+                f"train_loss {train_loss:.4f} | train_acc {format_percent(train_acc)} | "
+                f"val_loss {val_loss:.4f} | val_acc {format_percent(val_acc)} | "
+                f"best {format_percent(next_best_val_acc)}"
+            ),
         )
+        write_progress_line(
+            overall_progress,
+            (
+                f"train ready epoch {epoch:02d}/{epochs} | "
+                f"train_acc {format_percent(train_acc)} | "
+                f"val_acc {format_percent(val_acc)} | "
+                f"best {format_percent(next_best_val_acc)}"
+            ),
+        )
+        epoch_progress.set_postfix_str(
+            (
+                f"done | train_acc {format_percent(train_acc)} | "
+                f"val_acc {format_percent(val_acc)}"
+            )
+        )
+        epoch_progress.close()
 
         save_checkpoint(
             path=last_path,
@@ -295,6 +373,8 @@ def train_model(
                 small_image_stem=small_image_stem,
             )
 
+    overall_progress.set_postfix_str(f"epoch {epochs}/{epochs}")
+    overall_progress.close()
     plot_history(history, output_dir / "training_curves.png")
     save_json(
         output_dir / "history.json",

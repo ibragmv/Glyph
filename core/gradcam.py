@@ -14,15 +14,19 @@ class GradCAM:
         self.activations: Optional[torch.Tensor] = None
         self.gradients: Optional[torch.Tensor] = None
         self._forward_handle = target_layer.register_forward_hook(self._forward_hook)
-        self._backward_handle = target_layer.register_full_backward_hook(self._backward_hook)
+        self._backward_handle = target_layer.register_full_backward_hook(
+            self._backward_hook
+        )
 
-    def _forward_hook(self, module, inputs, output) -> None:
+    def _forward_hook(self, _module, _inputs, output) -> None:
         self.activations = output.detach()
 
-    def _backward_hook(self, module, grad_input, grad_output) -> None:
+    def _backward_hook(self, _module, _grad_input, grad_output) -> None:
         self.gradients = grad_output[0].detach()
 
-    def generate(self, image_tensor: torch.Tensor, class_idx: Optional[int] = None) -> np.ndarray:
+    def generate(
+        self, image_tensor: torch.Tensor, class_idx: Optional[int] = None
+    ) -> np.ndarray:
         self.model.zero_grad(set_to_none=True)
         logits = self.model(image_tensor)
         if class_idx is None:
@@ -37,7 +41,9 @@ class GradCAM:
         weights = self.gradients.mean(dim=(2, 3), keepdim=True)
         cam = (weights * self.activations).sum(dim=1, keepdim=True)
         cam = F.relu(cam)
-        cam = F.interpolate(cam, size=image_tensor.shape[-2:], mode="bilinear", align_corners=False)
+        cam = F.interpolate(
+            cam, size=image_tensor.shape[-2:], mode="bilinear", align_corners=False
+        )
         cam = cam.squeeze().detach().cpu().numpy()
         cam -= cam.min()
         cam /= cam.max() + 1e-8
@@ -48,7 +54,9 @@ class GradCAM:
         self._backward_handle.remove()
 
 
-def overlay_heatmap(grayscale_image: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45) -> np.ndarray:
+def overlay_heatmap(
+    grayscale_image: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45
+) -> np.ndarray:
     import matplotlib.pyplot as plt
 
     grayscale = grayscale_image.astype(np.float32)

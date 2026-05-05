@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import colorsys
 import os
 import re
 import shutil
@@ -72,6 +73,43 @@ def warn(text: object) -> str:
 
 def danger(text: object) -> str:
     return _apply(text, RED, BOLD)
+
+
+def _rgb(r: int, g: int, b: int) -> str:
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+def rainbow_block(text: object) -> str:
+    raw = str(text)
+    if not _supports_color() or not raw:
+        return raw
+
+    lines = raw.splitlines()
+    visible_columns = [
+        col
+        for line in lines
+        for col, char in enumerate(line)
+        if not char.isspace()
+    ]
+    if not visible_columns:
+        return raw
+
+    start = min(visible_columns)
+    span = max(1, max(visible_columns) - start)
+    rendered: list[str] = []
+    for line in lines:
+        chunks: list[str] = []
+        for col, char in enumerate(line):
+            if char.isspace():
+                chunks.append(char)
+                continue
+            ratio = (col - start) / span
+            red, green, blue = colorsys.hsv_to_rgb(ratio, 0.75, 1.0)
+            chunks.append(
+                f"{BOLD}{_rgb(int(red * 255), int(green * 255), int(blue * 255))}{char}{RESET}"
+            )
+        rendered.append("".join(chunks))
+    return "\n".join(rendered)
 
 
 def path_text(value: object) -> str:

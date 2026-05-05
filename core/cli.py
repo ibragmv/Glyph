@@ -13,13 +13,13 @@ from core.console import (
     display_path,
     dim,
     bright,
-    info,
     print_error,
     print_banner,
     print_log,
     print_rank,
     print_summary,
     print_warning,
+    rainbow_block,
 )
 from core.runtime import configure_runtime, prepare_matplotlib
 from core.utils import format_percent
@@ -48,7 +48,7 @@ def _root_help_header() -> str:
     lines = [
         f"{accent('›')} {bright('glyph --help')}",
         "",
-        str(info(_GLYPH_HELP_ART)),
+        rainbow_block(_GLYPH_HELP_ART),
         "",
         _help_row("Task:", "classify printed Imperial Aramaic letters"),
         _help_row("Flow:", "build -> gen -> train -> val -> pred / scan / bench / check", value_style=accent_soft),

@@ -50,12 +50,8 @@ def _root_help_header() -> str:
         "",
         rainbow_block(_GLYPH_HELP_ART),
         "",
-        _help_row("Task:", "classify printed Imperial Aramaic letters"),
-        _help_row("Flow:", "build -> gen -> train -> val -> pred / scan / bench / check", value_style=accent_soft),
-        _help_row("Code:", "lint / syntax / smoke / qa", value_style=accent_soft),
-        _help_row("Input:", "fonts/ and image files", value_style=accent_soft),
-        _help_row("Output:", "dataset/ and artifacts/", value_style=accent_soft),
-        _help_row("Entry:", "./glyph", value_style=accent_soft),
+        _help_row("Flow:", "build | gen | train | val | pred | scan | bench | check", value_style=accent_soft),
+        _help_row("QA:", "lint | syntax | smoke | qa", value_style=accent_soft),
     ]
     return "\n".join(lines)
 
@@ -63,83 +59,22 @@ def _root_help_header() -> str:
 def _command_help_header(prog: str) -> str:
     command_name = prog.split()[-1]
     lines = [f"{accent('›')} {bright(f'{prog} --help')}", ""]
-    header_rows = {
-        "build": [
-            _help_row("Action:", "build the glyph launcher"),
-            _help_row("Output:", "./glyph", value_style=accent_soft),
-            _help_row("Runtime:", ".glyph/", value_style=accent_soft),
-        ],
-        "gen": [
-            _help_row("Action:", "generate training and validation data"),
-            _help_row("Output:", "dataset/", value_style=accent_soft),
-            _help_row("Fonts:", "--font FILE / --fontdir DIR", value_style=accent_soft),
-            _help_row("Default:", "1200 train / 300 val per class"),
-            _help_row("Render:", "128 canvas -> 64 px output"),
-        ],
-        "train": [
-            _help_row("Action:", "train a classifier from data"),
-            _help_row("Input:", "dataset/train and dataset/val", value_style=accent_soft),
-            _help_row("Output:", "artifacts/", value_style=accent_soft),
-            _help_row("Default:", "30 epochs, batch 128, lr 1e-3"),
-            _help_row("Model:", "resnet18 and mobile backbones"),
-        ],
-        "val": [
-            _help_row("Action:", "run validation and save reports"),
-            _help_row("Dataset:", "--dir DIR", value_style=accent_soft, note="default dataset"),
-            _help_row("Checkpoint:", "--pt FILE", value_style=accent_soft),
-            _help_row("Output:", "--out DIR", value_style=accent_soft, note="default artifacts/val"),
-            _help_row("Default:", "batch 128"),
-        ],
-        "pred": [
-            _help_row("Action:", "predict one image"),
-            _help_row("Image:", "--img FILE", value_style=accent_soft),
-            _help_row("Checkpoint:", "--pt FILE", value_style=accent_soft),
-            _help_row("Output:", "top-k ranked classes and confidence"),
-            _help_row("Default:", "top = 3"),
-        ],
-        "scan": [
-            _help_row("Action:", "scan a folder and save predictions"),
-            _help_row("Input:", "DIR with images", value_style=accent_soft),
-            _help_row("Checkpoint:", "--pt FILE", value_style=accent_soft),
-            _help_row("Output:", "artifacts/scans/<stamp>_name", value_style=accent_soft),
-            _help_row("Default:", "batch 128, top = 3"),
-        ],
-        "bench": [
-            _help_row("Action:", "benchmark external images"),
-            _help_row("Input:", "DIR with images", value_style=accent_soft),
-            _help_row("Labels:", "--csv FILE", value_style=accent_soft, note="optional labels for metrics"),
-            _help_row("Output:", "artifacts/benchmarks/<stamp>_name", value_style=accent_soft),
-            _help_row("Default:", "batch 128, top = 3"),
-        ],
-        "check": [
-            _help_row("Action:", "check setup readiness", value_style=accent_soft),
-            _help_row("Dataset:", "--dir DIR", value_style=accent_soft, note="default dataset"),
-            _help_row("Checkpoint:", "--pt FILE", value_style=accent_soft, note="default artifacts/best_model.pt"),
-            _help_row("Checks:", "dataset, checkpoint, fonts, runtime"),
-            _help_row("Default:", "warnings shown, broken state fails"),
-        ],
-        "lint": [
-            _help_row("Action:", "run ruff on the project"),
-            _help_row("Scope:", "core, scripts, tests", value_style=accent_soft),
-            _help_row("Output:", "pass or fail", value_style=accent_soft),
-        ],
-        "syntax": [
-            _help_row("Action:", "compile project modules"),
-            _help_row("Scope:", "core, scripts, tests", value_style=accent_soft),
-            _help_row("Output:", "pass or fail", value_style=accent_soft),
-        ],
-        "smoke": [
-            _help_row("Action:", "run smoke suite"),
-            _help_row("Scope:", "tests/smoke.py", value_style=accent_soft),
-            _help_row("Output:", "pass or fail", value_style=accent_soft),
-        ],
-        "qa": [
-            _help_row("Action:", "run full fast verification"),
-            _help_row("Steps:", "lint, syntax, smoke", value_style=accent_soft),
-            _help_row("Output:", "pass or fail", value_style=accent_soft),
-        ],
+    summaries = {
+        "build": "build the local launcher",
+        "gen": "generate dataset images",
+        "train": "train a classifier",
+        "val": "run validation and export reports",
+        "pred": "predict a single image",
+        "scan": "scan a folder and save predictions",
+        "bench": "benchmark labeled or unlabeled folders",
+        "check": "verify dataset, checkpoint, fonts, runtime",
+        "lint": "run ruff",
+        "syntax": "compile Python modules",
+        "smoke": "run smoke tests",
+        "qa": "run lint + syntax + smoke",
     }
-    lines.extend(header_rows.get(command_name, []))
+    if command_name in summaries:
+        lines.append(_help_row("About:", summaries[command_name], value_style=accent_soft))
     return "\n".join(lines)
 
 
@@ -160,11 +95,19 @@ class GlyphHelpFormatter(
 
     def add_usage(self, usage, actions, groups, prefix=None):
         if prefix is None:
-            prefix = f"{accent('Usage')} "
+            prefix = "usage: "
         return super().add_usage(usage, actions, groups, prefix)
 
     def _format_action_invocation(self, action):
         return super()._format_action_invocation(action)
+
+    def _format_action(self, action):
+        text = super()._format_action(action)
+        if isinstance(action, argparse._SubParsersAction):
+            lines = text.splitlines()
+            if len(lines) > 1:
+                text = "\n".join(lines[1:])
+        return text
 
 
 class GlyphArgumentParser(argparse.ArgumentParser):
@@ -172,6 +115,12 @@ class GlyphArgumentParser(argparse.ArgumentParser):
         text = super().format_help().rstrip()
         if self.description:
             text = text.replace(f"{self.description}\n\n", "", 1)
+        lines = text.splitlines()
+        for idx, line in enumerate(lines):
+            if line.startswith("usage: "):
+                lines[idx] = line.replace("usage:", accent("Usage:"), 1)
+                break
+        text = "\n".join(lines)
         header = (
             _root_help_header()
             if self.prog == "glyph"
@@ -302,14 +251,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=GlyphHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  glyph build\n"
             "  glyph gen --out dataset\n"
             "  glyph train --dir dataset --out artifacts\n"
-            "  glyph val --dir dataset --pt artifacts/best_model.pt\n"
             "  glyph pred --pt artifacts/best_model.pt --img sample.png\n"
-            "  glyph scan --pt artifacts/best_model.pt external_scans\n"
-            "  glyph bench --pt artifacts/best_model.pt --csv labels.csv external_scans\n"
-            "  glyph check\n"
             "  glyph qa"
         ),
     )

@@ -10,6 +10,14 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = PROJECT_ROOT / ".cache"
+_IGNORED_WARNING_PATTERNS = (
+    "Matplotlib is building the font cache; this may take a moment.",
+    r"Error fetching version info .*",
+    r"resource_tracker: There appear to be \d+ leaked semaphore objects.*",
+    r".*'oneOf' deprecated - use 'one_of'.*",
+    r".*'parseString' deprecated - use 'parse_string'.*",
+    r".*'resetCache' deprecated - use 'reset_cache'.*",
+)
 
 
 def _show_runtime_warning(
@@ -35,30 +43,8 @@ def configure_runtime() -> None:
     os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
     warnings.showwarning = _show_runtime_warning
-    warnings.filterwarnings(
-        "ignore",
-        message="Matplotlib is building the font cache; this may take a moment.",
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r"Error fetching version info .*",
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r"resource_tracker: There appear to be \d+ leaked semaphore objects.*",
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*'oneOf' deprecated - use 'one_of'.*",
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*'parseString' deprecated - use 'parse_string'.*",
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*'resetCache' deprecated - use 'reset_cache'.*",
-    )
+    for pattern in _IGNORED_WARNING_PATTERNS:
+        warnings.filterwarnings("ignore", message=pattern)
     warnings.simplefilter("default")
 
 

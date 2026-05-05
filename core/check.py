@@ -8,7 +8,11 @@ from typing import Any
 
 import torch
 
-from core.checkpoints import get_checkpoint_class_names, load_model_checkpoint
+from core.checkpoints import (
+    get_checkpoint_class_names,
+    get_checkpoint_temperature,
+    load_model_checkpoint,
+)
 from core.constants import CLASS_NAMES, LABEL_DIRS
 from core.datagen import discover_fonts
 from core.runtime import configure_runtime, prepare_matplotlib
@@ -141,7 +145,7 @@ def inspect_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
         "status": status,
         "message": message,
         "backbone_name": backbone,
-        "temperature": float(metadata.get("calibration", {}).get("temperature", 1.0)),
+        "temperature": get_checkpoint_temperature(checkpoint),
         "class_names": class_names,
         "metadata": metadata,
     }

@@ -116,19 +116,11 @@ def path_text(value: object) -> str:
     return _apply(value, WHITE)
 
 
-def error_label() -> str:
-    return danger("[error]")
-
-
-def warning_label() -> str:
-    return warn("[warning]")
-
-
 def channel_label(channel: str, tone: str = "info") -> str:
     if tone == "error":
-        return error_label()
+        return danger("[error]")
     if tone == "warn":
-        return warning_label()
+        return warn("[warning]")
     if tone == "success":
         palette = {
             "build": accent(channel),
@@ -230,10 +222,6 @@ def display_path(path: Path | str) -> str:
     return path_text(Path(path))
 
 
-def progress_label(command: str, scope: str) -> str:
-    return f"› {command} {scope}"
-
-
 def create_progress(
     iterable=None,
     *,
@@ -252,7 +240,7 @@ def create_progress(
         position=position,
         dynamic_ncols=True,
         colour=color,
-        desc=progress_label(command, scope),
+        desc=f"› {command} {scope}",
         bar_format=(
             "{desc:<28} {bar:24} "
             "{percentage:3.0f}% | {n_fmt}/{total_fmt} | {elapsed}<{remaining} | {postfix}"

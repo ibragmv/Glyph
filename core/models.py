@@ -56,12 +56,12 @@ DEFAULT_BACKBONE = "resnet18"
 
 
 def get_available_backbones() -> tuple[str, ...]:
-    return tuple(BACKBONE_SPECS.keys())
+    return tuple(BACKBONE_SPECS)
 
 
 def get_backbone_spec(backbone_name: str) -> BackboneSpec:
     if backbone_name not in BACKBONE_SPECS:
-        available = ", ".join(get_available_backbones())
+        available = ", ".join(BACKBONE_SPECS)
         raise ValueError(f"Unsupported backbone {backbone_name!r}. Available: {available}")
     return BACKBONE_SPECS[backbone_name]
 

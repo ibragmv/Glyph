@@ -9,4 +9,5 @@ opencv-python-headless>=4.10
 albumentations>=1.4
 torch>=2.3
 torchvision>=0.18
-
+pytest>=8.3
+ruff>=0.6

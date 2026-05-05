@@ -31,6 +31,10 @@ def _supports_color() -> bool:
     return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
 
 
+def _supports_progress() -> bool:
+    return sys.stderr.isatty()
+
+
 def _apply(text: object, *styles: str) -> str:
     text = str(text)
     if not _supports_color() or not styles:
@@ -90,19 +94,25 @@ def channel_label(channel: str, tone: str = "info") -> str:
     if tone == "success":
         palette = {
             "build": accent(channel),
-            "data": ok(channel),
+            "gen": ok(channel),
             "train": ok(channel),
-            "eval": info(channel),
-            "infer": ok(channel),
+            "val": info(channel),
+            "pred": ok(channel),
+            "scan": ok(channel),
+            "bench": ok(channel),
+            "check": info(channel),
         }
         return palette.get(channel, ok(channel))
 
     palette = {
         "build": accent(channel),
-        "data": accent(channel),
+        "gen": accent(channel),
         "train": info(channel),
-        "eval": warn(channel),
-        "infer": ok(channel),
+        "val": warn(channel),
+        "pred": ok(channel),
+        "scan": ok(channel),
+        "bench": ok(channel),
+        "check": info(channel),
     }
     return palette.get(channel, info(channel))
 
@@ -130,8 +140,18 @@ def print_banner(command: str, subtitle: str | None = None) -> None:
         print(f"  {dim(subtitle)}")
 
 
-def print_log(channel: str, message: str, tone: str = "info") -> None:
+def print_log(
+    channel: str,
+    message: str,
+    tone: str = "info",
+    *,
+    wrap: bool = False,
+) -> None:
     prefix = channel_label(channel, tone=tone)
+    if not wrap:
+        print(f"{prefix} {message}")
+        return
+
     prefix_plain = "[error]" if tone == "error" else "[warning]" if tone == "warn" else f"{channel} "
     lines = _wrap_plain_text(message, _terminal_width() - len(prefix_plain) - 1)
     print(f"{prefix} {lines[0]}")
@@ -189,6 +209,7 @@ def create_progress(
     return tqdm(
         iterable,
         total=total,
+        disable=not _supports_progress(),
         leave=leave,
         position=position,
         dynamic_ncols=True,
@@ -202,4 +223,7 @@ def create_progress(
 
 
 def write_progress_line(progress, line: str) -> None:
+    if getattr(progress, "disable", False):
+        print(line)
+        return
     progress.write(line)

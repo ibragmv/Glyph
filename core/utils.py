@@ -46,8 +46,8 @@ def compute_image_mean_std(image_paths: Iterable[Path]) -> tuple[float, float]:
     pixel_count = 0
 
     for path in image_paths:
-        image = Image.open(path).convert("L")
-        array = np.asarray(image, dtype=np.float32) / 255.0
+        with Image.open(path) as image:
+            array = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
         pixel_sum += float(array.sum())
         pixel_sq_sum += float(np.square(array).sum())
         pixel_count += array.size

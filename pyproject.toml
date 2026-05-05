@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+python_files = ["smoke.py"]
+markers = [
+    "smoke: fast smoke coverage for CLI, dataset generation, checkpoint loading, and inference",
+]
+
+[tool.ruff]
+target-version = "py39"
+src = ["core", "scripts", "tests"]
+extend-exclude = [".glyph", ".venv"]

@@ -8,11 +8,16 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torch.utils.data import DataLoader
 
 from core.augmentations import build_eval_transforms
-from core.checkpoints import load_model_checkpoint
+from core.checkpoints import (
+    get_checkpoint_class_names,
+    get_checkpoint_normalization,
+    get_checkpoint_temperature,
+    load_model_checkpoint,
+)
 from core.console import create_progress, display_path, print_log, print_summary
-from core.constants import CLASS_NAMES
 from core.datasets import ImperialAramaicDataset
 from core.gradcam import GradCAM, overlay_heatmap
+from core.runtime import configure_runtime
 from core.utils import ensure_dir, format_percent, save_json
 
 
@@ -20,6 +25,7 @@ def collect_predictions(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
+    temperature: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     all_probs = []
     all_preds = []
@@ -29,7 +35,7 @@ def collect_predictions(
     with torch.no_grad():
         iterator = create_progress(
             loader,
-            command="eval",
+            command="val",
             scope="predict",
             color="cyan",
             leave=False,
@@ -37,7 +43,7 @@ def collect_predictions(
         )
         for images, labels, paths in iterator:
             images = images.to(device, non_blocking=True)
-            logits = model(images)
+            logits = model(images) / temperature
             probs = torch.softmax(logits, dim=1)
             preds = probs.argmax(dim=1)
 
@@ -84,6 +90,7 @@ def plot_random_predictions(
     preds: np.ndarray,
     labels: np.ndarray,
     output_path: Path,
+    class_names: list[str],
     mean: float,
     std: float,
     seed: int = 42,
@@ -107,7 +114,7 @@ def plot_random_predictions(
         confidence = float(probs[dataset_idx, predicted_idx])
         ax.imshow(image, cmap="gray")
         ax.set_title(
-            f"P:{CLASS_NAMES[predicted_idx]}\nT:{CLASS_NAMES[true_idx]}\n{confidence:.2%}",
+            f"P:{class_names[predicted_idx]}\nT:{class_names[true_idx]}\n{confidence:.2%}",
             fontsize=9,
         )
         ax.set_axis_off()
@@ -127,12 +134,17 @@ def plot_gradcam_examples(
     device: torch.device,
     output_path: Path,
     indices: list[int],
+    class_names: list[str],
     mean: float,
     std: float,
 ) -> None:
     import matplotlib.pyplot as plt
 
-    gradcam = GradCAM(model=model, target_layer=model.layer4[-1].conv2)
+    target_layer = getattr(model, "gradcam_layer", None)
+    if target_layer is None:
+        raise RuntimeError("Selected backbone does not expose a Grad-CAM target layer.")
+
+    gradcam = GradCAM(model=model, target_layer=target_layer)
     fig, axes = plt.subplots(len(indices), 2, figsize=(8, 3 * len(indices)))
     if len(indices) == 1:
         axes = np.array([axes])
@@ -149,11 +161,11 @@ def plot_gradcam_examples(
             prediction = model(input_tensor).argmax(dim=1).item()
 
         axes[row, 0].imshow(grayscale, cmap="gray")
-        axes[row, 0].set_title(f"Input: {CLASS_NAMES[label]}")
+        axes[row, 0].set_title(f"Input: {class_names[label]}")
         axes[row, 0].set_axis_off()
 
         axes[row, 1].imshow(overlay)
-        axes[row, 1].set_title(f"Grad-CAM: {CLASS_NAMES[prediction]}")
+        axes[row, 1].set_title(f"Grad-CAM: {class_names[prediction]}")
         axes[row, 1].set_axis_off()
 
     fig.tight_layout()
@@ -170,12 +182,13 @@ def evaluate_model(
     num_workers: int = 0,
     seed: int = 42,
 ) -> dict:
+    configure_runtime()
     ensure_dir(output_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, checkpoint = load_model_checkpoint(checkpoint_path, device)
-
-    mean = checkpoint["mean"]
-    std = checkpoint["std"]
+    class_names = get_checkpoint_class_names(checkpoint)
+    mean, std = get_checkpoint_normalization(checkpoint)
+    temperature = get_checkpoint_temperature(checkpoint)
     dataset = ImperialAramaicDataset(
         root=data_dir,
         split="val",
@@ -199,23 +212,26 @@ def evaluate_model(
             ("output", display_path(output_dir)),
         ],
     )
-    probs, preds, labels, paths = collect_predictions(model, loader, device)
-    cm = confusion_matrix(labels, preds, labels=list(range(len(CLASS_NAMES))))
+    probs, preds, labels, paths = collect_predictions(
+        model, loader, device, temperature
+    )
+    cm = confusion_matrix(labels, preds, labels=list(range(len(class_names))))
     report = classification_report(
         labels,
         preds,
-        target_names=CLASS_NAMES,
+        target_names=class_names,
         output_dict=True,
         zero_division=0,
     )
 
-    plot_confusion_matrix(cm, CLASS_NAMES, output_dir / "confusion_matrix.png")
+    plot_confusion_matrix(cm, class_names, output_dir / "confusion_matrix.png")
     selected_indices = plot_random_predictions(
         dataset=dataset,
         probs=probs,
         preds=preds,
         labels=labels,
         output_path=output_dir / "random_predictions.png",
+        class_names=class_names,
         mean=mean,
         std=std,
         seed=seed,
@@ -226,6 +242,7 @@ def evaluate_model(
         device=device,
         output_path=output_dir / "gradcam_examples.png",
         indices=selected_indices[: min(6, len(selected_indices))],
+        class_names=class_names,
         mean=mean,
         std=std,
     )
@@ -234,19 +251,25 @@ def evaluate_model(
         output_dir / "classification_report.json",
         {
             "classification_report": report,
-            "class_names": CLASS_NAMES,
+            "class_names": class_names,
             "paths": paths,
         },
     )
     accuracy = float((preds == labels).mean())
     print_log(
-        "eval",
+        "val",
         f"accuracy {format_percent(accuracy)} | report {display_path(output_dir / 'classification_report.json')}",
         tone="success",
     )
     return {
         "device": device.type,
         "accuracy": accuracy,
+        "checkpoint_path": str(checkpoint_path),
+        "backbone_name": checkpoint["metadata"]["model"]["backbone_name"],
+        "temperature": temperature,
         "output_dir": str(output_dir),
         "report_path": str(output_dir / "classification_report.json"),
+        "confusion_matrix_path": str(output_dir / "confusion_matrix.png"),
+        "random_predictions_path": str(output_dir / "random_predictions.png"),
+        "gradcam_path": str(output_dir / "gradcam_examples.png"),
     }

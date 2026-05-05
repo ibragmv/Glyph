@@ -40,7 +40,7 @@ def _write_launcher(output_path: Path, python_executable: Path) -> None:
     output_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def build_binary(
+def build_launcher(
     output_path: Path,
     python_executable: Path | None = None,
     project_root: Path | None = None,

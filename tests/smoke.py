@@ -35,9 +35,13 @@ def test_dataset_generation_smoke(generated_dataset_dir: Path) -> None:
     assert metadata["num_classes"] == len(CLASS_NAMES)
     assert metadata["train_per_class"] == 1
     assert metadata["val_per_class"] == 1
-    assert metadata["total_images"] == len(CLASS_NAMES) * 2
+    assert metadata["synthetic_total_images"] == len(CLASS_NAMES) * 2
+    assert metadata["real_total_images"] > 0
+    assert metadata["total_images"] == metadata["synthetic_total_images"] + metadata["real_total_images"]
+    assert metadata["primary_validation_split"] == "realval"
     assert len(list((generated_dataset_dir / "train").rglob("*.png"))) == len(CLASS_NAMES)
     assert len(list((generated_dataset_dir / "val").rglob("*.png"))) == len(CLASS_NAMES)
+    assert len(list((generated_dataset_dir / "realval").rglob("*.png"))) > 0
     assert metadata["preview_sheets"]
 
 

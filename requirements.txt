@@ -1,6 +1,5 @@
 numpy>=1.26
 Pillow>=10.3
-fonttools>=4.53
 matplotlib>=3.8
 seaborn>=0.13
 scikit-learn>=1.5

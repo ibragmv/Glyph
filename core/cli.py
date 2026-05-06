@@ -60,13 +60,13 @@ def _command_help_header(prog: str) -> str:
     command_name = prog.split()[-1]
     lines = [f"{accent('›')} {bright(f'{prog} --help')}", ""]
     summaries = {
-        "gen": "generate dataset images",
-        "train": "train a classifier",
-        "val": "run validation and export reports",
+        "gen": "build exemplar-driven dataset splits",
+        "train": "train on synthetic plus real splits",
+        "val": "run validation on the primary split",
         "pred": "predict a single image",
         "scan": "scan a folder and save predictions",
         "bench": "benchmark labeled or unlabeled folders",
-        "check": "verify dataset, checkpoint, fonts, runtime",
+        "check": "verify source assets, dataset, checkpoint, runtime",
         "lint": "run ruff",
         "syntax": "compile Python modules",
         "smoke": "run smoke tests",
@@ -216,14 +216,6 @@ def _configure_check_parser(parser: argparse.ArgumentParser) -> None:
         default=Path("artifacts/best_model.pt"),
         help="checkpoint file to inspect",
     )
-    check_fonts = parser.add_argument_group("Fonts")
-    check_fonts.add_argument(
-        "--fontdir",
-        type=Path,
-        action="append",
-        default=[],
-        help="additional font directory; repeatable",
-    )
     check_runtime = parser.add_argument_group("Runtime")
     check_runtime.add_argument(
         "--strict",
@@ -236,8 +228,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = GlyphArgumentParser(
         prog="glyph",
         description=(
-            "Build datasets, train checkpoints, export evaluation reports, and "
-            "process printed Imperial Aramaic image inputs."
+            "Build exemplar-driven datasets, train checkpoints against real validation, "
+            "export evaluation reports, and process printed Aramaic image inputs."
         ),
         formatter_class=GlyphHelpFormatter,
         epilog=(
@@ -255,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen_parser = subparsers.add_parser(
         "gen",
         help="Generate a dataset.",
-        description="Generate an Imperial Aramaic dataset with split-specific profiles.",
+        description="Generate synthetic data from canonical exemplars and copy real validation splits.",
         formatter_class=GlyphHelpFormatter,
     )
     gen_paths = gen_parser.add_argument_group("Paths")
@@ -264,21 +256,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("dataset"),
         help="dataset output directory",
-    )
-    gen_fonts = gen_parser.add_argument_group("Fonts")
-    gen_fonts.add_argument(
-        "--font",
-        type=Path,
-        action="append",
-        default=[],
-        help="explicit font path; repeatable",
-    )
-    gen_fonts.add_argument(
-        "--fontdir",
-        type=Path,
-        action="append",
-        default=[],
-        help="extra font directory; repeatable",
     )
     gen_render = gen_parser.add_argument_group("Generation")
     gen_render.add_argument(
@@ -306,10 +283,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="validation split render severity",
     )
     gen_render.add_argument(
-        "--holdout",
+        "--rval",
         type=float,
-        default=0.35,
-        help="fraction of fonts reserved for validation-only use",
+        default=0.25,
+        help="fraction of real crops reserved for real validation",
     )
     gen_render.add_argument(
         "--tmix",
@@ -330,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser = subparsers.add_parser(
         "train",
         help="Train a classifier.",
-        description="Train the classifier on dataset/train and evaluate on dataset/val.",
+        description="Train the classifier on synthetic plus real splits and monitor the primary validation split.",
         formatter_class=GlyphHelpFormatter,
     )
     train_paths = train_parser.add_argument_group("Paths")
@@ -419,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     val_parser = subparsers.add_parser(
         "val",
         help="Run validation.",
-        description="Evaluate a checkpoint on the validation split and save reports.",
+        description="Evaluate a checkpoint on the primary validation split and save reports.",
         formatter_class=GlyphHelpFormatter,
     )
     val_paths = val_parser.add_argument_group("Paths")
@@ -495,8 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
         "check",
         help="Check setup readiness.",
         description=(
-            "Inspect dataset, checkpoint, class-count consistency, font availability, "
-            "and runtime readiness before generation, validation, or external runs."
+            "Inspect source assets, dataset, checkpoint, class-count consistency, "
+            "and runtime readiness before training or evaluation."
         ),
         formatter_class=GlyphHelpFormatter,
     )
@@ -586,6 +563,7 @@ def handle_gen(args: argparse.Namespace) -> None:
             ("output", display_path(args.out)),
             ("train/class", args.train),
             ("val/class", args.val),
+            ("realval", f"{args.rval:.2f}"),
             ("train_hard", f"{args.thard:.2f}"),
             ("val_hard", f"{args.vhard:.2f}"),
             ("train_profiles", ",".join(train_profiles) or "default"),
@@ -601,11 +579,9 @@ def handle_gen(args: argparse.Namespace) -> None:
             canvas_size=args.canvas,
             output_size=args.size,
             seed=args.seed,
-            explicit_fonts=tuple(args.font),
-            extra_font_dirs=tuple(args.fontdir),
             train_hardness=args.thard,
             val_hardness=args.vhard,
-            holdout_font_fraction=args.holdout,
+            real_val_fraction=args.rval,
             train_profiles=train_profiles,
             val_profiles=val_profiles,
         ),
@@ -616,9 +592,11 @@ def handle_gen(args: argparse.Namespace) -> None:
             ("output", display_path(args.out)),
             ("classes", metadata["num_classes"]),
             ("images", metadata["total_images"]),
+            ("synthetic", metadata["synthetic_total_images"]),
+            ("real", metadata["real_total_images"]),
             ("train/class", metadata["train_per_class"]),
             ("val/class", metadata["val_per_class"]),
-            ("fonts", len(metadata["fonts"])),
+            ("val_split", metadata["primary_validation_split"]),
             ("preview_groups", sum(len(item) for item in metadata["preview_sheets"].values())),
         ],
     )
@@ -656,6 +634,7 @@ def handle_train(args: argparse.Namespace) -> None:
         [
             ("best_val_acc", format_percent(summary["best_val_acc"])),
             ("best_epoch", summary["best_epoch"]),
+            ("val_split", summary["val_split"]),
             ("best_checkpoint", display_path(summary["best_checkpoint"])),
             ("last_checkpoint", display_path(summary["last_checkpoint"])),
             ("history_json", display_path(summary["history_path"])),
@@ -690,6 +669,7 @@ def handle_val(args: argparse.Namespace) -> None:
         "Validation Summary",
         [
             ("accuracy", format_percent(summary["accuracy"])),
+            ("split", summary["split"]),
             ("backbone", summary["backbone_name"]),
             ("temperature", f"{summary['temperature']:.4f}"),
             ("checkpoint", display_path(summary["checkpoint_path"])),
@@ -841,7 +821,6 @@ def handle_check(args: argparse.Namespace) -> None:
     report = inspect_project(
         data_dir=args.dir,
         checkpoint_path=args.pt,
-        extra_font_dirs=tuple(args.fontdir),
     )
     print_summary(
         "Check Summary",
@@ -849,7 +828,7 @@ def handle_check(args: argparse.Namespace) -> None:
             ("status", report["status"]),
             ("dataset", display_path(args.dir)),
             ("checkpoint", display_path(args.pt)),
-            ("font_dirs", ", ".join(str(path) for path in args.fontdir) or "default"),
+            ("source", display_path(Path("source"))),
         ],
     )
     for item in report["checks"]:

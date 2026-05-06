@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import OneCycleLR
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 from core.augmentations import build_eval_transforms, build_train_transforms
 from core.console import (
@@ -24,7 +24,11 @@ from core.console import (
     write_progress_line,
 )
 from core.constants import CLASS_NAMES
-from core.datasets import ImperialAramaicDataset
+from core.datasets import (
+    ImperialAramaicDataset,
+    choose_training_splits,
+    choose_validation_split,
+)
 from core.models import DEFAULT_BACKBONE, build_model
 from core.runtime import configure_runtime
 from core.utils import (
@@ -70,15 +74,26 @@ def create_dataloaders(
     num_workers: int,
     mean: float,
     std: float,
-) -> tuple[DataLoader, DataLoader]:
-    train_dataset = ImperialAramaicDataset(
-        root=data_dir,
-        split="train",
-        transform=build_train_transforms(mean, std),
+) -> tuple[DataLoader, DataLoader, tuple[str, ...], str]:
+    train_splits = choose_training_splits(data_dir)
+    val_split = choose_validation_split(data_dir)
+
+    train_datasets = [
+        ImperialAramaicDataset(
+            root=data_dir,
+            split=split,
+            transform=build_train_transforms(mean, std),
+        )
+        for split in train_splits
+    ]
+    train_dataset = (
+        train_datasets[0]
+        if len(train_datasets) == 1
+        else ConcatDataset(train_datasets)
     )
     val_dataset = ImperialAramaicDataset(
         root=data_dir,
-        split="val",
+        split=val_split,
         transform=build_eval_transforms(mean, std),
     )
 
@@ -102,7 +117,7 @@ def create_dataloaders(
         shuffle=False,
         **loader_kwargs,
     )
-    return train_loader, val_loader
+    return train_loader, val_loader, train_splits, val_split
 
 
 class FocalLoss(nn.Module):
@@ -573,6 +588,8 @@ def build_training_metadata(
     output_dir: Path,
     train_loader: DataLoader,
     val_loader: DataLoader,
+    train_splits: tuple[str, ...],
+    val_split: str,
     epochs: int,
     batch_size: int,
     lr: float,
@@ -618,6 +635,8 @@ def build_training_metadata(
         },
         "dataset": {
             "root": str(data_dir),
+            "train_splits": list(train_splits),
+            "val_split": val_split,
             "train_samples": len(train_loader.dataset),
             "val_samples": len(val_loader.dataset),
             "train_batches": len(train_loader),
@@ -722,7 +741,12 @@ def train_model(
         raise ValueError("batch_size must be >= 1")
     if lr <= 0:
         raise ValueError("lr must be > 0")
-    mean, std = compute_image_mean_std(list_image_files(data_dir / "train"))
+    train_splits = choose_training_splits(data_dir)
+    val_split = choose_validation_split(data_dir)
+    training_image_paths: list[Path] = []
+    for split in train_splits:
+        training_image_paths.extend(list_image_files(data_dir / split))
+    mean, std = compute_image_mean_std(training_image_paths)
     mean = format_float(mean)
     std = format_float(std)
 
@@ -737,7 +761,7 @@ def train_model(
     if temperature_max_iter < 1:
         raise ValueError("temperature_max_iter must be >= 1")
 
-    train_loader, val_loader = create_dataloaders(
+    train_loader, val_loader, train_splits, val_split = create_dataloaders(
         data_dir=data_dir,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -810,6 +834,8 @@ def train_model(
             ("device", device.type),
             ("train", len(train_loader.dataset)),
             ("val", len(val_loader.dataset)),
+            ("train_splits", ",".join(train_splits)),
+            ("val_split", val_split),
             ("backbone", model_config["backbone_name"]),
             ("pretrained", "on" if pretrained else "off"),
             ("loss", loss_config["name"]),
@@ -935,6 +961,8 @@ def train_model(
             output_dir=output_dir,
             train_loader=train_loader,
             val_loader=val_loader,
+            train_splits=train_splits,
+            val_split=val_split,
             epochs=epochs,
             batch_size=batch_size,
             lr=lr,
@@ -1025,6 +1053,8 @@ def train_model(
         output_dir=output_dir,
         train_loader=train_loader,
         val_loader=val_loader,
+        train_splits=train_splits,
+        val_split=val_split,
         epochs=epochs,
         batch_size=batch_size,
         lr=lr,
@@ -1049,6 +1079,8 @@ def train_model(
         output_dir=output_dir,
         train_loader=train_loader,
         val_loader=val_loader,
+        train_splits=train_splits,
+        val_split=val_split,
         epochs=epochs,
         batch_size=batch_size,
         lr=lr,
@@ -1097,6 +1129,8 @@ def train_model(
         "device": device.type,
         "best_val_acc": best_val_acc,
         "best_epoch": best_epoch,
+        "train_splits": list(train_splits),
+        "val_split": val_split,
         "best_checkpoint": str(best_path),
         "last_checkpoint": str(last_path),
         "history_path": str(output_dir / "history.json"),

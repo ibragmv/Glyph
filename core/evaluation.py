@@ -15,7 +15,7 @@ from core.checkpoints import (
     load_model_checkpoint,
 )
 from core.console import create_progress, display_path, print_log, print_summary
-from core.datasets import ImperialAramaicDataset
+from core.datasets import ImperialAramaicDataset, choose_validation_split
 from core.gradcam import GradCAM, overlay_heatmap
 from core.runtime import configure_runtime
 from core.utils import ensure_dir, format_percent, save_json
@@ -189,9 +189,10 @@ def evaluate_model(
     class_names = get_checkpoint_class_names(checkpoint)
     mean, std = get_checkpoint_normalization(checkpoint)
     temperature = get_checkpoint_temperature(checkpoint)
+    val_split = choose_validation_split(data_dir)
     dataset = ImperialAramaicDataset(
         root=data_dir,
-        split="val",
+        split=val_split,
         transform=build_eval_transforms(mean, std),
         return_paths=True,
     )
@@ -208,6 +209,7 @@ def evaluate_model(
         [
             ("device", device.type),
             ("samples", len(dataset)),
+            ("split", val_split),
             ("checkpoint", display_path(checkpoint_path)),
             ("output", display_path(output_dir)),
         ],
@@ -264,6 +266,7 @@ def evaluate_model(
     return {
         "device": device.type,
         "accuracy": accuracy,
+        "split": val_split,
         "checkpoint_path": str(checkpoint_path),
         "backbone_name": checkpoint["metadata"]["model"]["backbone_name"],
         "temperature": temperature,

@@ -28,6 +28,5 @@ glyph:
 	else \
 		echo "[glyph] dependencies are up to date"; \
 	fi; \
-	PIP_CACHE_DIR="$(CURDIR)/.cache/pip" PIP_DISABLE_PIP_VERSION_CHECK=1 "$(VENV_PYTHON)" -m pip check >/dev/null; \
 	printf 'requirements_sha256=%s\npython_version=%s\n' "$$requirements_sha" "$$current_python_version" >"$(VENV_STAMP)"; \
 	"$(VENV_PYTHON)" -m core.builder

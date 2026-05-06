@@ -1,13 +1,49 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 
-from core.constants import IMPERIAL_ARAMAIC_SYMBOLS, LABEL_DIRS
+from core.constants import ALPHABET, LABEL_DIRS
 from core.utils import list_image_files
+
+
+def available_splits(root: Path) -> tuple[str, ...]:
+    if not root.exists():
+        return ()
+    return tuple(sorted(path.name for path in root.iterdir() if path.is_dir()))
+
+
+def read_dataset_metadata(root: Path) -> dict | None:
+    metadata_path = root / "metadata.json"
+    if not metadata_path.is_file():
+        return None
+    with metadata_path.open("r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+def choose_validation_split(root: Path) -> str:
+    metadata = read_dataset_metadata(root) or {}
+    preferred = metadata.get("primary_validation_split")
+    if isinstance(preferred, str) and (root / preferred).is_dir():
+        return preferred
+    if (root / "realval").is_dir():
+        return "realval"
+    return "val"
+
+
+def choose_training_splits(root: Path) -> tuple[str, ...]:
+    splits = []
+    if (root / "train").is_dir():
+        splits.append("train")
+    if (root / "realtrain").is_dir():
+        splits.append("realtrain")
+    if not splits:
+        raise FileNotFoundError(f"No training splits were found in {root}")
+    return tuple(splits)
 
 
 class ImperialAramaicDataset(Dataset):
@@ -24,8 +60,8 @@ class ImperialAramaicDataset(Dataset):
         if not split_root.exists():
             raise FileNotFoundError(f"Split directory not found: {split_root}")
 
-        for symbol in IMPERIAL_ARAMAIC_SYMBOLS:
-            label_idx = symbol["index"]
+        for item in ALPHABET:
+            label_idx = item["index"]
             label_dir = split_root / LABEL_DIRS[label_idx]
             if not label_dir.exists():
                 continue

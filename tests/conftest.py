@@ -14,7 +14,6 @@ from core.models import build_model
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FONT_PATH = PROJECT_ROOT / "fonts" / "NotoSansImperialAramaic-Regular.ttf"
 
 
 def _build_smoke_env(workspace: Path) -> dict[str, str]:
@@ -64,8 +63,6 @@ def generated_dataset_dir(
         "gen",
         "--out",
         dataset_dir,
-        "--font",
-        FONT_PATH,
         "--train",
         "1",
         "--val",
@@ -78,8 +75,8 @@ def generated_dataset_dir(
         "clean",
         "--vmix",
         "clean",
-        "--holdout",
-        "0",
+        "--rval",
+        "0.25",
         "--seed",
         "7",
     )

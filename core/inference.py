@@ -368,7 +368,7 @@ def predict_folder(
             ),
             tone="success",
         )
-    else:
+    elif labels_csv is not None:
         print_log(
             command_name,
             "no true labels matched; summary metrics were skipped",

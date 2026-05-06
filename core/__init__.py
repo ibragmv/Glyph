@@ -1,1 +1,1 @@
-"""Glyph package for Imperial Aramaic letter classification."""
+"""Glyph package for Aramaic letter classification."""

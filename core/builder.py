@@ -67,3 +67,20 @@ def build_launcher(
     _copy_package(package_source_dir, package_target_dir)
     _write_launcher(resolved_output_path, selected_python.absolute())
     return resolved_output_path
+
+
+def main() -> None:
+    from core.console import display_path, print_banner, print_log
+
+    root_dir = Path(__file__).resolve().parent.parent
+    print_banner("make glyph", "launcher build")
+    built_path = build_launcher(
+        output_path=root_dir / "glyph",
+        python_executable=Path(sys.executable),
+        project_root=root_dir,
+    )
+    print_log("build", f"complete {display_path(built_path)}", tone="success")
+
+
+if __name__ == "__main__":
+    main()

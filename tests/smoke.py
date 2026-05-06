@@ -22,7 +22,6 @@ def test_cli_help_smoke(
     result = cli_runner("--help")
 
     assert result.returncode == 0, result.stderr
-    assert "build" in result.stdout
     assert "glyph --help" in result.stdout
     assert "gen" in result.stdout
     assert "pred" in result.stdout

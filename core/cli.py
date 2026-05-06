@@ -50,7 +50,7 @@ def _root_help_header() -> str:
         "",
         rainbow_block(_GLYPH_HELP_ART),
         "",
-        _help_row("Flow:", "build | gen | train | val | pred | scan | bench | check", value_style=accent_soft),
+        _help_row("Flow:", "gen | train | val | pred | scan | bench | check", value_style=accent_soft),
         _help_row("QA:", "lint | syntax | smoke | qa", value_style=accent_soft),
     ]
     return "\n".join(lines)
@@ -60,7 +60,6 @@ def _command_help_header(prog: str) -> str:
     command_name = prog.split()[-1]
     lines = [f"{accent('›')} {bright(f'{prog} --help')}", ""]
     summaries = {
-        "build": "build the local launcher",
         "gen": "generate dataset images",
         "train": "train a classifier",
         "val": "run validation and export reports",
@@ -92,14 +91,6 @@ class GlyphHelpFormatter(
         }
         pretty_heading = heading_map.get(heading, heading.title())
         super().start_section(str(accent(pretty_heading)))
-
-    def add_usage(self, usage, actions, groups, prefix=None):
-        if prefix is None:
-            prefix = "usage: "
-        return super().add_usage(usage, actions, groups, prefix)
-
-    def _format_action_invocation(self, action):
-        return super()._format_action_invocation(action)
 
     def _format_action(self, action):
         text = super()._format_action(action)
@@ -260,14 +251,6 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="command", required=True, parser_class=GlyphArgumentParser
     )
-
-    build_parser = subparsers.add_parser(
-        "build",
-        help="Build the glyph launcher.",
-        description="Build the local glyph launcher and package the runtime.",
-        formatter_class=GlyphHelpFormatter,
-    )
-    build_parser.set_defaults(handler=handle_build)
 
     gen_parser = subparsers.add_parser(
         "gen",
@@ -584,24 +567,6 @@ def _resolve_run_output_dir(
     return make_run_dir(root_dir=root_dir, image_dir=image_dir, run_name=run_name)
 
 
-def _resolve_project_root() -> Path:
-    env_root = os.environ.get("GLYPH_ROOT")
-    if env_root:
-        root = Path(env_root).resolve()
-        if (root / "requirements.txt").is_file() and (root / "core").is_dir():
-            return root
-
-    for candidate in Path(__file__).resolve().parents:
-        if (
-            (candidate / "requirements.txt").is_file()
-            and (candidate / "core").is_dir()
-            and (candidate / "scripts").is_dir()
-        ):
-            return candidate
-
-    raise RuntimeError("Project root could not be resolved.")
-
-
 def handle_gen(args: argparse.Namespace) -> None:
     from core.datagen import DataGenConfig, build_dataset
 
@@ -658,21 +623,6 @@ def handle_gen(args: argparse.Namespace) -> None:
         ],
     )
     print_log("gen", "dataset complete", tone="success")
-
-
-def handle_build(args: argparse.Namespace) -> None:
-    del args
-    print_banner("glyph build", "launcher packaging")
-    from core.builder import build_launcher
-
-    root_dir = _resolve_project_root()
-    built_path = build_launcher(
-        output_path=root_dir / "glyph",
-        python_executable=Path(sys.executable),
-        project_root=root_dir,
-    )
-    print_log("build", f"complete {display_path(built_path)}", tone="success")
-
 
 def handle_train(args: argparse.Namespace) -> None:
     if not args.dir.exists():

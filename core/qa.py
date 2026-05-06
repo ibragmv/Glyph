@@ -12,15 +12,11 @@ def _find_root() -> Path:
     env_root = os.environ.get("GLYPH_ROOT")
     if env_root:
         root = Path(env_root).resolve()
-        if (root / "requirements.txt").is_file():
+        if (root / "requirements.txt").is_file() and (root / "core").is_dir():
             return root
 
     for candidate in Path(__file__).resolve().parents:
-        if (
-            (candidate / "requirements.txt").is_file()
-            and (candidate / "core").is_dir()
-            and (candidate / "scripts").is_dir()
-        ):
+        if (candidate / "requirements.txt").is_file() and (candidate / "core").is_dir():
             return candidate
 
     raise RuntimeError("Project root could not be resolved for glyph qa.")
@@ -60,7 +56,7 @@ def run_lint() -> None:
 def run_syntax() -> None:
     _run_step(
         "syntax",
-        [sys.executable, "-m", "compileall", "-q", "core", "scripts", "tests"],
+        [sys.executable, "-m", "compileall", "-q", "core", "tests"],
         env=_qa_env(),
     )
 

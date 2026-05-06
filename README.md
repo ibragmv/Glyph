@@ -1,140 +1,139 @@
 # Glyph
 
-`Glyph` is a CLI tool for classifying printed Imperial Aramaic letters.
+`Glyph` is a CLI for classifying printed Imperial Aramaic letters from images.
 
-It can:
+It covers the full workflow:
 
-- generate a synthetic dataset from fonts
+- prepare the local environment
+- generate a synthetic dataset
 - train a classifier
 - validate a checkpoint
 - predict one image
-- process a folder of external images
-
-## What This Project Is
-
-This project is built around one task: take an image of a printed Imperial Aramaic letter and predict which letter it is.
-
-Typical workflow:
-
-1. generate a dataset
-2. train the model
-3. validate the checkpoint
-4. test on your own images
-
-Main command:
-
-```bash
-./glyph
-```
+- scan or benchmark folders of images
 
 ## Quick Start
 
-If you are running the project for the first time:
+Use one command to prepare the environment and build the local launcher:
 
 ```bash
-./scripts/startup.sh
-./.venv/bin/python -m core build
+make glyph
+```
+
+Then run the default workflow:
+
+```bash
 ./glyph gen
 ./glyph train
 ./glyph val --pt artifacts/best_model.pt
 ```
 
-After that you can test a single image:
+Predict one image:
 
 ```bash
 ./glyph pred --pt artifacts/best_model.pt --img path/to/image.png
 ```
 
-## The 5 Commands You Actually Need
+## How It Works
 
-### 1. Prepare the environment
+There are only two layers you need to think about.
+
+### `make glyph`
+
+This is the only `make` entry point.
+
+It:
+
+- creates or refreshes `.venv`
+- installs or refreshes dependencies
+- validates the environment
+- builds the local `./glyph` launcher
+
+It is safe to run again when you want to refresh the local setup.
+
+### `./glyph ...`
+
+This is the product CLI.
+
+Use it after `make glyph` exists and the launcher has been built.
+
+## First Run
+
+For a clean local setup:
 
 ```bash
-./scripts/startup.sh
+make glyph
+./glyph --help
 ```
 
-This creates or refreshes `.venv/`.
+That is the standard happy path.
 
-If you want to quickly verify the environment without reinstalling anything:
+## Common Tasks
 
-```bash
-./scripts/startup.sh --check
-```
-
-### 2. Build the launcher
-
-```bash
-./.venv/bin/python -m core build
-```
-
-This creates the local `./glyph` command.
-
-### 3. Generate data
+### Generate a dataset
 
 ```bash
 ./glyph gen
 ```
 
-By default this creates:
-
-- `dataset/train/`
-- `dataset/val/`
-- `dataset/metadata.json`
-
-If you want a smaller test run:
+Smaller test run:
 
 ```bash
 ./glyph gen --train 50 --val 10
 ```
 
-### 4. Train the model
+Default output:
+
+- `dataset/train/`
+- `dataset/val/`
+- `dataset/metadata.json`
+
+### Train a model
 
 ```bash
 ./glyph train
 ```
 
-By default training reads from `dataset/` and writes to `artifacts/`.
-
-The main output files are:
+Default output:
 
 - `artifacts/best_model.pt`
 - `artifacts/last_model.pt`
+- training reports in `artifacts/`
 
-### 5. Validate the checkpoint
+### Validate a checkpoint
 
 ```bash
 ./glyph val --pt artifacts/best_model.pt
 ```
 
-This evaluates the model on `dataset/val` and writes reports to `artifacts/val/`.
+Default output:
 
-## Test On Your Own Images
+- `artifacts/val/`
 
-### One image
+### Predict one image
 
 ```bash
 ./glyph pred --pt artifacts/best_model.pt --img path/to/image.png
 ```
 
-This prints the top predictions and confidence scores.
+This prints ranked predictions with confidence.
 
-### A folder of images
+### Scan a folder
 
 ```bash
 ./glyph scan --pt artifacts/best_model.pt path/to/folder
 ```
 
-This creates a run under `artifacts/scans/` and saves predictions for the whole folder.
+This saves a new run under `artifacts/scans/`.
 
-### A labeled external test set
+### Benchmark an external set
 
 ```bash
 ./glyph bench --pt artifacts/best_model.pt --csv labels.csv path/to/folder
 ```
 
-Use this when you have external images and want real benchmark metrics.
+Use this when you have external images and want metrics.
 
-Expected CSV format:
+Expected CSV shape:
 
 ```csv
 file,true_label
@@ -142,33 +141,35 @@ sample_01.png,aleph
 sample_02.png,beth
 ```
 
-## Before You Run Large Jobs
-
-Use:
+### Check project readiness
 
 ```bash
 ./glyph check
 ```
 
-This checks:
+This verifies:
 
-- runtime
+- runtime imports
 - dataset structure
-- checkpoint availability
+- checkpoint readability
+- font discovery
 - class consistency
-- fonts
 
-## Where Things Go
+### Run fast QA
 
-- `dataset/` — generated training and validation images
-- `artifacts/` — checkpoints and reports
-- `fonts/` — compatible fonts
-- `.venv/` — local Python environment
-- `.glyph/` — packaged launcher runtime
+```bash
+./glyph qa
+```
 
-## Helpful Commands
+This runs:
 
-Show help:
+- `lint`
+- `syntax`
+- `smoke`
+
+## Command Reference
+
+Show root help:
 
 ```bash
 ./glyph --help
@@ -180,28 +181,35 @@ Show help for one command:
 ./glyph train --help
 ```
 
-Run fast project checks:
+Main commands:
 
-```bash
-./glyph qa
-```
+- `gen` — generate dataset images
+- `train` — train a classifier
+- `val` — validate a checkpoint
+- `pred` — predict one image
+- `scan` — process a folder of images
+- `bench` — benchmark a folder, with or without labels
+- `check` — verify local readiness
+- `qa` — run fast project checks
+
+## Project Layout
+
+- `fonts/` — compatible fonts used for generation
+- `dataset/` — generated training and validation data
+- `artifacts/` — checkpoints, reports, scans, benchmarks
+- `.venv/` — local Python environment
+- `.glyph/` — packaged launcher runtime
 
 ## If Something Fails
 
-If `./glyph` is missing:
+If the local setup or launcher looks broken:
 
 ```bash
-./.venv/bin/python -m core build
+rm -rf .venv .glyph glyph
+make glyph
 ```
 
-If the environment looks broken:
-
-```bash
-./scripts/startup.sh --recreate
-./.venv/bin/python -m core build
-```
-
-If `best_model.pt` does not exist yet, that is normal. You need to run:
+If `artifacts/best_model.pt` does not exist yet:
 
 ```bash
 ./glyph gen
@@ -209,6 +217,13 @@ If `best_model.pt` does not exist yet, that is normal. You need to run:
 ./glyph val --pt artifacts/best_model.pt
 ```
 
+If you want the fastest sanity check:
+
+```bash
+./glyph check
+./glyph qa
+```
+
 ## License
 
-MIT
+Under MIT License

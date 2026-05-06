@@ -10,6 +10,7 @@ from core.models import get_available_backbones
 from core.console import (
     accent,
     accent_soft,
+    cosmic_orange_block,
     display_path,
     dim,
     bright,
@@ -19,7 +20,6 @@ from core.console import (
     print_rank,
     print_summary,
     print_warning,
-    rainbow_block,
 )
 from core.runtime import configure_runtime, prepare_matplotlib
 from core.utils import format_percent
@@ -48,7 +48,7 @@ def _root_help_header() -> str:
     lines = [
         f"{accent('›')} {bright('glyph --help')}",
         "",
-        rainbow_block(_GLYPH_HELP_ART),
+        cosmic_orange_block(_GLYPH_HELP_ART),
         "",
         _help_row("Flow:", "gen | train | val | pred | scan | bench | check", value_style=accent_soft),
         _help_row("QA:", "lint | syntax | smoke | qa", value_style=accent_soft),

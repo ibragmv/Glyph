@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import colorsys
 import os
 import re
 import shutil
@@ -79,7 +78,21 @@ def _rgb(r: int, g: int, b: int) -> str:
     return f"\033[38;2;{r};{g};{b}m"
 
 
-def rainbow_block(text: object) -> str:
+def _blend_channel(left: int, right: int, ratio: float) -> int:
+    return int(left + ((right - left) * ratio))
+
+
+def _blend_rgb(
+    left: tuple[int, int, int], right: tuple[int, int, int], ratio: float
+) -> tuple[int, int, int]:
+    return (
+        _blend_channel(left[0], right[0], ratio),
+        _blend_channel(left[1], right[1], ratio),
+        _blend_channel(left[2], right[2], ratio),
+    )
+
+
+def cosmic_orange_block(text: object) -> str:
     raw = str(text)
     if not _supports_color() or not raw:
         return raw
@@ -96,6 +109,12 @@ def rainbow_block(text: object) -> str:
 
     start = min(visible_columns)
     span = max(1, max(visible_columns) - start)
+    palette = (
+        (255, 120, 32),
+        (255, 160, 56),
+        (255, 196, 88),
+        (255, 224, 140),
+    )
     rendered: list[str] = []
     for line in lines:
         chunks: list[str] = []
@@ -104,9 +123,14 @@ def rainbow_block(text: object) -> str:
                 chunks.append(char)
                 continue
             ratio = (col - start) / span
-            red, green, blue = colorsys.hsv_to_rgb(ratio, 0.75, 1.0)
+            scaled = ratio * (len(palette) - 1)
+            index = min(int(scaled), len(palette) - 2)
+            local_ratio = scaled - index
+            red, green, blue = _blend_rgb(
+                palette[index], palette[index + 1], local_ratio
+            )
             chunks.append(
-                f"{BOLD}{_rgb(int(red * 255), int(green * 255), int(blue * 255))}{char}{RESET}"
+                f"{BOLD}{_rgb(red, green, blue)}{char}{RESET}"
             )
         rendered.append("".join(chunks))
     return "\n".join(rendered)

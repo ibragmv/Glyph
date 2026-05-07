@@ -62,6 +62,8 @@ def split_real_paths(
 ) -> dict[str, tuple[Path, ...]]:
     if not paths:
         return {"realtrain": (), "realval": ()}
+    if val_fraction <= 0.0:
+        return {"realtrain": paths, "realval": ()}
 
     ordered = list(paths)
     # Deterministic shuffle without depending on Python's randomized hash seed.
@@ -71,8 +73,11 @@ def split_real_paths(
             f"{seed}:{path.name.lower()}:{path.as_posix()}".encode("utf-8")
         ).hexdigest(),
     )
-    val_count = max(1, int(round(len(keyed) * val_fraction)))
-    if len(keyed) > 1:
+    if val_fraction >= 1.0:
+        val_count = len(keyed)
+    else:
+        val_count = max(1, int(round(len(keyed) * val_fraction)))
+    if 0.0 < val_fraction < 1.0 and len(keyed) > 1:
         val_count = min(val_count, len(keyed) - 1)
     val_paths = tuple(keyed[:val_count])
     train_paths = tuple(keyed[val_count:])

@@ -77,6 +77,11 @@ def configure_runtime() -> None:
         warnings.filterwarnings("ignore", message=pattern)
     warnings.simplefilter("default")
     torch.set_float32_matmul_precision("high")
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.allow_tf32 = True
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = True
 
 
 def prepare_matplotlib() -> None:
@@ -103,7 +108,7 @@ def resolve_runtime_device() -> RuntimeDevice:
             device=torch.device("cuda"),
             type="cuda",
             label=label,
-            reason="CUDA is available and selected.",
+            reason="nvidia cuda",
             cuda_built=cuda_built,
             cuda_available=cuda_available,
             cuda_version=torch.version.cuda,
@@ -117,8 +122,8 @@ def resolve_runtime_device() -> RuntimeDevice:
         return RuntimeDevice(
             device=torch.device("mps"),
             type="mps",
-            label="mps (Apple Metal)",
-            reason="Apple Metal Performance Shaders is available and selected.",
+            label="mps",
+            reason="apple silicon",
             cuda_built=cuda_built,
             cuda_available=cuda_available,
             cuda_version=torch.version.cuda,
@@ -129,11 +134,11 @@ def resolve_runtime_device() -> RuntimeDevice:
         )
 
     if cuda_built:
-        reason = "Torch was built with CUDA support, but no CUDA device is available."
+        reason = "cpu fallback"
     elif mps_built and not mps_available:
-        reason = "Torch has MPS support, but Apple Metal is unavailable on this host."
+        reason = "cpu fallback"
     else:
-        reason = "No GPU accelerator is available; using CPU."
+        reason = "cpu"
 
     return RuntimeDevice(
         device=torch.device("cpu"),

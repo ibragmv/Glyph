@@ -84,13 +84,16 @@ class ImperialAramaicDataset(Dataset):
 
 
 class ImageFolderDataset(Dataset):
-    def __init__(self, root: Path, transform=None) -> None:
+    def __init__(self, root: Path, transform=None, image_size: int = 64) -> None:
         self.root = Path(root)
         self.transform = transform
+        self.image_size = int(image_size)
         self.samples = list_image_files(self.root)
 
         if not self.root.exists():
             raise FileNotFoundError(f"Image directory not found: {self.root}")
+        if self.image_size < 1:
+            raise ValueError("image_size must be >= 1")
         if not self.samples:
             raise FileNotFoundError(f"No supported image files were found in {self.root}")
 
@@ -100,7 +103,9 @@ class ImageFolderDataset(Dataset):
     def __getitem__(self, index: int):
         image_path = self.samples[index]
         with Image.open(image_path) as image:
-            array = np.asarray(image.convert("L").resize((64, 64)))
+            array = np.asarray(
+                image.convert("L").resize((self.image_size, self.image_size))
+            )
 
         if self.transform is not None:
             image_tensor = self.transform(image=array)["image"]

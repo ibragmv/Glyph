@@ -115,6 +115,7 @@ def smoke_checkpoint_path(smoke_workspace: Path) -> Path:
                 "dataset": {
                     "class_names": CLASS_NAMES,
                     "normalization": {"mean": 0.5, "std": 0.5},
+                    "image_size": 64,
                 },
                 "calibration": {"temperature": 1.0},
             },

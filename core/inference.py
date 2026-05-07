@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from core.augmentations import build_eval_transforms
 from core.checkpoints import (
     get_checkpoint_class_names,
+    get_checkpoint_image_size,
     get_checkpoint_normalization,
     get_checkpoint_temperature,
     load_model_checkpoint,
@@ -66,9 +67,9 @@ def _build_ranked_predictions(
     return rows
 
 
-def _read_image_array(image_path: Path) -> np.ndarray:
+def _read_image_array(image_path: Path, image_size: int) -> np.ndarray:
     with Image.open(image_path) as image:
-        grayscale = image.convert("L").resize((64, 64))
+        grayscale = image.convert("L").resize((image_size, image_size))
         return np.asarray(grayscale)
 
 
@@ -216,17 +217,18 @@ def predict_image(
     model = optimize_model_for_device(model, runtime_device)
     metadata = checkpoint["metadata"]
     class_names = get_checkpoint_class_names(checkpoint)
+    image_size = get_checkpoint_image_size(checkpoint)
     mean, std = get_checkpoint_normalization(checkpoint)
     temperature = get_checkpoint_temperature(checkpoint)
 
-    array = _read_image_array(image_path)
+    array = _read_image_array(image_path, image_size)
     transform = build_eval_transforms(mean, std)
     tensor = prepare_image_batch(
         transform(image=array)["image"].unsqueeze(0),
         runtime_device,
     )
 
-    with torch.no_grad():
+    with torch.inference_mode():
         probs = torch.softmax(model(tensor) / temperature, dim=1)
         predictions = _build_ranked_predictions(
             probs=probs,
@@ -266,6 +268,7 @@ def predict_folder(
     model, checkpoint = load_model_checkpoint(checkpoint_path, runtime_device.device)
     model = optimize_model_for_device(model, runtime_device)
     class_names = get_checkpoint_class_names(checkpoint)
+    image_size = get_checkpoint_image_size(checkpoint)
     mean, std = get_checkpoint_normalization(checkpoint)
     temperature = get_checkpoint_temperature(checkpoint)
 
@@ -283,14 +286,18 @@ def predict_folder(
     dataset = ImageFolderDataset(
         root=image_dir,
         transform=build_eval_transforms(mean, std),
+        image_size=image_size,
     )
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=resolved_num_workers,
-        pin_memory=runtime_device.pin_memory,
-    )
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "num_workers": resolved_num_workers,
+        "pin_memory": runtime_device.pin_memory,
+    }
+    if resolved_num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 4
+        loader_kwargs["persistent_workers"] = True
+    loader = DataLoader(dataset, **loader_kwargs)
 
     print_summary(
         summary_title,
@@ -306,7 +313,7 @@ def predict_folder(
     )
 
     rows: list[dict] = []
-    with torch.no_grad():
+    with torch.inference_mode():
         iterator = create_progress(
             loader,
             command=command_name,

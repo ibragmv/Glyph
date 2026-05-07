@@ -49,6 +49,15 @@ def get_checkpoint_normalization(checkpoint: dict[str, Any]) -> tuple[float, flo
     return float(normalization["mean"]), float(normalization["std"])
 
 
+def get_checkpoint_image_size(checkpoint: dict[str, Any]) -> int:
+    metadata = get_checkpoint_metadata(checkpoint)
+    dataset_metadata = metadata.get("dataset", {})
+    image_size = int(dataset_metadata.get("image_size", 64))
+    if image_size < 1:
+        raise ValueError(f"Checkpoint image_size must be >= 1, got {image_size}")
+    return image_size
+
+
 def build_model_from_checkpoint(
     checkpoint: dict[str, Any], device: torch.device
 ) -> torch.nn.Module:

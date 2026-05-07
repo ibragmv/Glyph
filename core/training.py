@@ -11,6 +11,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
 from torch.optim import Adam
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import ConcatDataset, DataLoader
@@ -26,6 +27,7 @@ from core.console import (
 from core.constants import CLASS_NAMES
 from core.datasets import (
     ImperialAramaicDataset,
+    read_dataset_metadata,
     choose_training_splits,
     choose_validation_split,
 )
@@ -51,6 +53,15 @@ from core.utils import (
 
 def current_learning_rate(optimizer: Adam) -> float:
     return float(optimizer.param_groups[0]["lr"])
+
+
+def build_optimizer(model: nn.Module, lr: float, device: RuntimeDevice) -> Adam:
+    if device.type == "cuda":
+        try:
+            return Adam(model.parameters(), lr=lr, fused=True)
+        except (TypeError, RuntimeError):
+            pass
+    return Adam(model.parameters(), lr=lr)
 
 
 def format_signed_delta(value: float, digits: int = 4) -> str:
@@ -115,6 +126,7 @@ def create_dataloaders(
     }
     if resolved_num_workers > 0:
         loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 4
 
     train_loader = DataLoader(
         train_dataset,
@@ -197,7 +209,7 @@ def collect_logits_and_labels(
     model.eval()
     logits_chunks: list[torch.Tensor] = []
     label_chunks: list[torch.Tensor] = []
-    with torch.no_grad():
+    with torch.inference_mode():
         for images, labels in loader:
             images = prepare_image_batch(images, device)
             logits = model(images)
@@ -343,6 +355,27 @@ def create_history() -> dict[str, Any]:
         "best_epoch": None,
         "best_val_acc": None,
     }
+
+
+def resolve_dataset_image_size(
+    data_dir: Path,
+    training_image_paths: list[Path],
+) -> int:
+    metadata = read_dataset_metadata(data_dir) or {}
+    image_size = metadata.get("image_size")
+    if isinstance(image_size, int) and image_size > 0:
+        return image_size
+
+    if not training_image_paths:
+        raise ValueError("No training images were found to resolve image_size.")
+
+    with Image.open(training_image_paths[0]) as image:
+        width, height = image.size
+    if width != height:
+        raise ValueError(
+            f"Training images must be square for checkpoint metadata, got {width}x{height}"
+        )
+    return int(width)
 
 
 def build_epoch_record(
@@ -613,6 +646,7 @@ def build_training_metadata(
     history: dict,
     best_path: Path,
     last_path: Path,
+    image_size: int,
 ) -> dict[str, Any]:
     best_epoch = history["best_epoch"]
     best_val_acc = history["best_val_acc"]
@@ -655,6 +689,7 @@ def build_training_metadata(
                 "mean": mean,
                 "std": std,
             },
+            "image_size": image_size,
         },
         "environment": {
             "device": device.label,
@@ -765,6 +800,7 @@ def train_model(
     mean, std = compute_image_mean_std(training_image_paths)
     mean = format_float(mean)
     std = format_float(std)
+    image_size = resolve_dataset_image_size(data_dir, training_image_paths)
 
     resolved_num_workers = resolve_num_workers(num_workers)
     if not 0.0 <= label_smoothing < 1.0:
@@ -821,7 +857,7 @@ def train_model(
         focal_gamma=focal_gamma,
         focal_alpha=focal_alpha,
     )
-    optimizer = Adam(model.parameters(), lr=lr)
+    optimizer = build_optimizer(model, lr, runtime_device)
     scheduler = OneCycleLR(
         optimizer=optimizer,
         max_lr=lr,
@@ -999,6 +1035,7 @@ def train_model(
             history=history,
             best_path=best_path,
             last_path=last_path,
+            image_size=image_size,
         )
         save_checkpoint(
             path=last_path,
@@ -1095,6 +1132,7 @@ def train_model(
         history=history,
         best_path=best_path,
         last_path=last_path,
+        image_size=image_size,
     )
     last_metadata = build_training_metadata(
         run_id=run_id,
@@ -1121,6 +1159,7 @@ def train_model(
         history=history,
         best_path=best_path,
         last_path=last_path,
+        image_size=image_size,
     )
     save_json(
         output_dir / "history.json",

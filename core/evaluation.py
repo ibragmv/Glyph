@@ -38,7 +38,7 @@ def collect_predictions(
     all_labels = []
     all_paths: list[str] = []
 
-    with torch.no_grad():
+    with torch.inference_mode():
         iterator = create_progress(
             loader,
             command="val",
@@ -163,7 +163,7 @@ def plot_gradcam_examples(
         grayscale = np.clip((grayscale * std) + mean, 0.0, 1.0)
         overlay = overlay_heatmap(grayscale, heatmap)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             prediction = model(input_tensor).argmax(dim=1).item()
 
         axes[row, 0].imshow(grayscale, cmap="gray")
@@ -204,13 +204,16 @@ def evaluate_model(
         transform=build_eval_transforms(mean, std),
         return_paths=True,
     )
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=resolved_num_workers,
-        pin_memory=runtime_device.pin_memory,
-    )
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "num_workers": resolved_num_workers,
+        "pin_memory": runtime_device.pin_memory,
+    }
+    if resolved_num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 4
+        loader_kwargs["persistent_workers"] = True
+    loader = DataLoader(dataset, **loader_kwargs)
 
     print_summary(
         "Evaluation Run",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
@@ -521,6 +522,21 @@ def _save_preview_sheets(output_dir: Path, preview_buckets: dict) -> dict:
     return preview_paths
 
 
+def _reset_output_dir(output_dir: Path, class_assets: list[ClassAssets]) -> None:
+    managed_paths = [output_dir / "metadata.json", output_dir / "preview"]
+    for split in ("train", "val", "realtrain", "realval"):
+        for assets in class_assets:
+            managed_paths.append(output_dir / split / assets.label_dir)
+
+    for path in managed_paths:
+        if not path.exists():
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
 def _merge_preview_buckets(
     preview_buckets: dict[tuple[str, str], list[Image.Image]],
     preview_payload: dict[str, dict[str, list[np.ndarray]]],
@@ -623,11 +639,14 @@ def _resolve_gen_jobs(total_classes: int) -> int:
 def build_dataset(config: DataGenConfig) -> dict:
     seed_everything(config.seed)
     ensure_dir(config.output_dir)
+    if not 0.0 <= config.real_val_fraction <= 1.0:
+        raise ValueError("real_val_fraction must be in [0, 1]")
 
     class_assets = get_class_assets()
     texture_paths = get_texture_paths()
     if not class_assets:
         raise FileNotFoundError("No source assets were found in ./source.")
+    _reset_output_dir(config.output_dir, class_assets)
 
     split_profiles = {
         "train": _resolve_profile_names("train", config.train_profiles),
@@ -729,8 +748,23 @@ def build_dataset(config: DataGenConfig) -> dict:
                     )
                     handle_result(result)
         except (OSError, PermissionError):
+            _reset_output_dir(config.output_dir, class_assets)
+            for split in ("train", "val", "realtrain", "realval"):
+                for assets in class_assets:
+                    ensure_dir(config.output_dir / split / assets.label_dir)
             jobs = 1
             completed_classes = 0
+            next_result_index = 0
+            pending_results = {}
+            preview_buckets = {
+                (split, profile_name): []
+                for split, profile_names in split_profiles.items()
+                for profile_name in profile_names
+            }
+            profile_histogram = {
+                split: {profile_name: 0 for profile_name in profile_names}
+                for split, profile_names in split_profiles.items()
+            }
             progress.set_postfix_str(
                 f"classes 0/{len(class_assets)} | jobs {jobs}",
                 refresh=False,
@@ -768,6 +802,7 @@ def build_dataset(config: DataGenConfig) -> dict:
         "class_titles": [assets.title for assets in class_assets],
         "train_per_class": config.train_per_class,
         "val_per_class": config.val_per_class,
+        "image_size": config.output_size,
         "synthetic_total_images": total_synthetic,
         "real_total_images": realtrain_total + realval_total,
         "total_images": total_synthetic + realtrain_total + realval_total,

@@ -6,9 +6,10 @@ from pathlib import Path
 import shutil
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from core.console import create_progress, write_progress_line
+from core.constants import R_TRAIN_SPLIT, R_VAL_SPLIT, TRAIN_SPLIT, VAL_SPLIT
 from core.runtime import resolve_num_workers
 from core.source import (
     ClassAssets,
@@ -23,6 +24,8 @@ RESAMPLE_BILINEAR = Image.Resampling.BILINEAR
 RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
 TRANSFORM_AFFINE = Image.Transform.AFFINE
 TRANSFORM_QUAD = Image.Transform.QUAD
+RGB_WHITE = (248, 245, 239)
+RGBA_TRANSPARENT = (255, 255, 255, 0)
 
 
 @dataclass
@@ -51,6 +54,7 @@ class GenerationProfile:
     damage_scale: float
     texture_scale: float
     lighting_scale: float
+    color_scale: float
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ GENERATION_PROFILES = {
         damage_scale=0.22,
         texture_scale=0.35,
         lighting_scale=0.40,
+        color_scale=0.35,
     ),
     "scan": GenerationProfile(
         name="scan",
@@ -84,6 +89,7 @@ GENERATION_PROFILES = {
         damage_scale=0.65,
         texture_scale=0.90,
         lighting_scale=0.90,
+        color_scale=0.75,
     ),
     "damaged": GenerationProfile(
         name="damaged",
@@ -94,6 +100,7 @@ GENERATION_PROFILES = {
         damage_scale=1.30,
         texture_scale=1.10,
         lighting_scale=1.10,
+        color_scale=0.95,
     ),
     "harsh": GenerationProfile(
         name="harsh",
@@ -104,6 +111,7 @@ GENERATION_PROFILES = {
         damage_scale=1.55,
         texture_scale=1.25,
         lighting_scale=1.25,
+        color_scale=1.10,
     ),
 }
 
@@ -159,59 +167,55 @@ def _choose_profile(
     return GENERATION_PROFILES[selected]
 
 
-def _open_grayscale(path: Path) -> Image.Image:
+def _open_rgba(path: Path) -> Image.Image:
     with Image.open(path) as image:
-        if "A" in image.getbands():
-            background = Image.new("RGBA", image.size, (255, 255, 255, 255))
-            image = Image.alpha_composite(background, image.convert("RGBA"))
-        return image.convert("L")
+        return image.convert("RGBA")
 
 
-def _threshold_mask(image: Image.Image) -> Image.Image:
-    array = np.asarray(image, dtype=np.float32)
-    border = np.concatenate(
-        [
-            array[0, :],
-            array[-1, :],
-            array[:, 0],
-            array[:, -1],
-        ]
-    )
-    background = float(np.median(border)) if border.size else 255.0
-    normalized = array.copy()
-    if background < 128:
-        normalized = 255.0 - normalized
-        background = 255.0 - background
+def _trim_to_content(image: Image.Image) -> Image.Image:
+    alpha_bbox = image.getchannel("A").getbbox()
+    if alpha_bbox is not None:
+        return image.crop(alpha_bbox)
 
-    threshold = min(background - 12.0, 230.0)
-    threshold = max(threshold, 32.0)
-    darkness = np.clip(background - normalized, 0.0, 255.0)
-    mask = np.where(normalized <= threshold, darkness, 0.0)
-    if mask.max() <= 0.0:
-        mask = np.clip(255.0 - normalized, 0.0, 255.0)
-    return Image.fromarray(mask.astype(np.uint8))
-
-
-def _crop_mask(mask: Image.Image) -> Image.Image:
-    bbox = mask.getbbox()
+    rgb = image.convert("RGB")
+    background = Image.new("RGB", rgb.size, (255, 255, 255))
+    diff = ImageChops.difference(rgb, background)
+    bbox = diff.convert("L").point(lambda value: 255 if value > 12 else 0).getbbox()
     if bbox is None:
-        return mask
-    return mask.crop(bbox)
+        return image
+    return image.crop(bbox)
 
 
-def _fit_mask(mask: Image.Image, canvas_size: int, scale: float) -> Image.Image:
-    target = Image.new("L", (canvas_size, canvas_size), 0)
-    cropped = _crop_mask(mask)
-    width, height = cropped.size
+def _derive_alpha_from_lightness(image: Image.Image) -> Image.Image:
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    if alpha.getbbox() is not None:
+        return rgba
+
+    rgb = rgba.convert("RGB")
+    luma = np.asarray(rgb.convert("L"), dtype=np.float32)
+    alpha_values = np.clip((255.0 - luma) * 2.8, 0.0, 255.0).astype(np.uint8)
+    rgba.putalpha(Image.fromarray(alpha_values))
+    return rgba
+
+
+def _fit_overlay(
+    overlay: Image.Image,
+    *,
+    canvas_size: int,
+    scale: float,
+) -> Image.Image:
+    target = Image.new("RGBA", (canvas_size, canvas_size), RGBA_TRANSPARENT)
+    overlay = _trim_to_content(_derive_alpha_from_lightness(overlay))
+    width, height = overlay.size
     if width == 0 or height == 0:
         return target
 
-    max_dim = max(width, height)
-    fit_ratio = (canvas_size * scale) / float(max_dim)
-    resized = cropped.resize(
+    fit_ratio = (canvas_size * scale) / float(max(width, height))
+    resized = overlay.resize(
         (
-            max(4, int(round(width * fit_ratio))),
-            max(4, int(round(height * fit_ratio))),
+            max(8, int(round(width * fit_ratio))),
+            max(8, int(round(height * fit_ratio))),
         ),
         RESAMPLE_LANCZOS,
     )
@@ -219,24 +223,26 @@ def _fit_mask(mask: Image.Image, canvas_size: int, scale: float) -> Image.Image:
         (canvas_size - resized.width) // 2,
         (canvas_size - resized.height) // 2,
     )
-    target.paste(resized, offset)
+    target.alpha_composite(resized, offset)
     return target
 
 
 def _apply_affine(
-    mask: Image.Image,
+    overlay: Image.Image,
     rng: np.random.Generator,
     severity: float,
     profile: GenerationProfile,
 ) -> Image.Image:
-    angle = float(rng.uniform(-20.0, 20.0) * severity * profile.warp_scale)
-    scale = float(rng.uniform(0.84, 1.14))
-    shear_x = float(rng.uniform(-0.20, 0.20) * severity * profile.warp_scale)
-    shear_y = float(rng.uniform(-0.10, 0.10) * severity * profile.warp_scale)
-    translate_x = float(rng.uniform(-7.0, 7.0) * severity)
-    translate_y = float(rng.uniform(-7.0, 7.0) * severity)
+    angle = float(rng.uniform(-18.0, 18.0) * severity * profile.warp_scale)
+    scale = float(rng.uniform(0.86, 1.10))
+    shear_x = float(rng.uniform(-0.16, 0.16) * severity * profile.warp_scale)
+    shear_y = float(rng.uniform(-0.08, 0.08) * severity * profile.warp_scale)
+    translate_x = float(rng.uniform(-8.0, 8.0) * severity)
+    translate_y = float(rng.uniform(-8.0, 8.0) * severity)
 
-    rotated = mask.rotate(angle, resample=RESAMPLE_BILINEAR, fillcolor=0)
+    rotated = overlay.rotate(
+        angle, resample=RESAMPLE_BILINEAR, fillcolor=RGBA_TRANSPARENT
+    )
     matrix = (
         scale,
         shear_x,
@@ -250,17 +256,17 @@ def _apply_affine(
         TRANSFORM_AFFINE,
         matrix,
         resample=RESAMPLE_BILINEAR,
-        fillcolor=0,
+        fillcolor=RGBA_TRANSPARENT,
     )
 
 
 def _apply_perspective(
-    mask: Image.Image,
+    overlay: Image.Image,
     rng: np.random.Generator,
     severity: float,
     profile: GenerationProfile,
 ) -> Image.Image:
-    width, height = mask.size
+    width, height = overlay.size
     margin = int(round((4 + 10 * severity) * profile.warp_scale))
     src = [
         (rng.integers(0, margin + 1), rng.integers(0, margin + 1)),
@@ -269,49 +275,55 @@ def _apply_perspective(
         (rng.integers(0, margin + 1), height - rng.integers(0, margin + 1)),
     ]
     quad = tuple(float(value) for point in src for value in point)
-    return mask.transform(
-        mask.size,
+    return overlay.transform(
+        overlay.size,
         TRANSFORM_QUAD,
         quad,
         resample=RESAMPLE_BILINEAR,
-        fillcolor=0,
+        fillcolor=RGBA_TRANSPARENT,
     )
 
 
-def _apply_damage(
-    mask: Image.Image,
+def _apply_overlay_damage(
+    overlay: Image.Image,
     rng: np.random.Generator,
     severity: float,
-    split: str,
     profile: GenerationProfile,
 ) -> Image.Image:
-    damaged = mask.copy()
+    damaged = overlay.copy()
     draw = ImageDraw.Draw(damaged)
     width, height = damaged.size
-    holes = int(round(rng.uniform(1, 4) * severity * profile.damage_scale))
-    for _ in range(max(1, holes)):
-        if rng.random() > (0.30 if split == "train" else 0.55):
+    patches = int(round(rng.uniform(1, 4) * severity * profile.damage_scale))
+    for _ in range(max(1, patches)):
+        if rng.random() > min(0.96, 0.42 * profile.damage_scale):
             continue
-        hole_w = int(round(rng.uniform(4, 16) * severity * profile.damage_scale))
-        hole_h = int(round(rng.uniform(4, 18) * severity * profile.damage_scale))
-        x0 = int(rng.integers(0, max(1, width - hole_w)))
-        y0 = int(rng.integers(0, max(1, height - hole_h)))
-        draw.rectangle((x0, y0, x0 + hole_w, y0 + hole_h), fill=0)
-
-    if rng.random() < min(0.95, 0.30 * severity * profile.damage_scale):
-        damaged = damaged.filter(ImageFilter.MaxFilter(size=3))
-    if rng.random() < min(0.95, 0.40 * severity * profile.damage_scale):
-        damaged = damaged.filter(ImageFilter.MinFilter(size=3))
-
-    if rng.random() < min(0.98, 0.36 * severity * profile.crop_scale):
-        crop = int(round(rng.uniform(2, 8) * severity * profile.crop_scale))
-        cropped = Image.new("L", damaged.size, 0)
-        offset_x = int(rng.integers(-crop, crop + 1))
-        offset_y = int(rng.integers(-crop, crop + 1))
-        cropped.paste(damaged, (offset_x, offset_y))
-        damaged = cropped
-
+        patch_w = int(round(rng.uniform(6, 20) * severity * profile.damage_scale))
+        patch_h = int(round(rng.uniform(6, 20) * severity * profile.damage_scale))
+        x0 = int(rng.integers(0, max(1, width - patch_w)))
+        y0 = int(rng.integers(0, max(1, height - patch_h)))
+        draw.rectangle((x0, y0, x0 + patch_w, y0 + patch_h), fill=RGBA_TRANSPARENT)
     return damaged
+
+
+def _tint_overlay(
+    overlay: Image.Image,
+    rng: np.random.Generator,
+    severity: float,
+    profile: GenerationProfile,
+) -> Image.Image:
+    rgb = overlay.convert("RGB")
+    rgb = ImageEnhance.Color(rgb).enhance(
+        0.80 + rng.uniform(-0.10, 0.22) * profile.color_scale
+    )
+    rgb = ImageEnhance.Contrast(rgb).enhance(
+        1.00 + rng.uniform(-0.10, 0.20) * profile.color_scale
+    )
+    rgb = ImageEnhance.Brightness(rgb).enhance(
+        0.98 + rng.uniform(-0.08, 0.12) * severity * profile.color_scale
+    )
+    tinted = rgb.convert("RGBA")
+    tinted.putalpha(overlay.getchannel("A"))
+    return tinted
 
 
 def _pick_background(
@@ -321,30 +333,35 @@ def _pick_background(
     severity: float,
     profile: GenerationProfile,
 ) -> Image.Image:
-    if texture_paths and rng.random() < min(0.98, 0.72 * profile.texture_scale):
+    if texture_paths and rng.random() < min(0.98, 0.76 * profile.texture_scale):
         texture_path = texture_paths[int(rng.integers(0, len(texture_paths)))]
-        texture = _open_grayscale(texture_path).resize((size, size), RESAMPLE_LANCZOS)
-        texture = ImageOps.autocontrast(texture)
-        texture = ImageEnhance.Contrast(texture).enhance(
-            0.72 + (severity * 0.22 * profile.texture_scale)
+        texture = (
+            _open_rgba(texture_path)
+            .convert("RGB")
+            .resize((size, size), RESAMPLE_LANCZOS)
         )
-        texture = ImageEnhance.Brightness(texture).enhance(
-            1.05 + (rng.uniform(-0.08, 0.10))
+        texture = ImageOps.autocontrast(texture)
+        texture = ImageEnhance.Color(texture).enhance(
+            0.88 + rng.uniform(-0.08, 0.18) * profile.color_scale
+        )
+        texture = ImageEnhance.Contrast(texture).enhance(
+            0.85 + rng.uniform(0.00, 0.24) * severity * profile.texture_scale
         )
         return texture
 
-    base = np.full((size, size), 236.0, dtype=np.float32)
-    base += rng.normal(0.0, 7.5 * severity * profile.texture_scale, size=(size, size))
+    base = np.full((size, size, 3), RGB_WHITE, dtype=np.float32)
+    base += rng.normal(0.0, 6.5 * severity * profile.texture_scale, size=base.shape)
     gradient_x = np.linspace(-1.0, 1.0, size, dtype=np.float32)
     gradient_y = np.linspace(-1.0, 1.0, size, dtype=np.float32)[:, None]
-    base += gradient_x * rng.uniform(-18.0, 18.0) * severity * profile.lighting_scale
-    base += gradient_y * rng.uniform(-18.0, 18.0) * severity * profile.lighting_scale
-    array = np.clip(base, 140.0, 255.0).astype(np.uint8)
-    return Image.fromarray(array).filter(ImageFilter.GaussianBlur(radius=1.4))
+    base[..., 0] += gradient_x[None, :] * rng.uniform(-14.0, 14.0)
+    base[..., 1] += gradient_y * rng.uniform(-12.0, 12.0)
+    base[..., 2] += gradient_x[None, :] * rng.uniform(-10.0, 10.0)
+    return Image.fromarray(np.clip(base, 120.0, 255.0).astype(np.uint8))
 
 
-def _compose_scan(
-    mask: Image.Image,
+def _compose_image(
+    overlay: Image.Image,
+    *,
     texture_paths: tuple[Path, ...],
     rng: np.random.Generator,
     severity: float,
@@ -355,52 +372,44 @@ def _compose_scan(
     background = _pick_background(
         texture_paths=texture_paths,
         rng=rng,
-        size=mask.size[0],
+        size=overlay.size[0],
         severity=severity,
         profile=profile,
     )
-    glyph_strength = np.asarray(mask, dtype=np.float32) / 255.0
-    background_arr = np.asarray(background, dtype=np.float32)
-    ink_level = float(20.0 + rng.uniform(0.0, 45.0))
-    composite = background_arr - (glyph_strength * (background_arr - ink_level))
+    composite = background.convert("RGBA")
+    composite.alpha_composite(overlay)
+    image = composite.convert("RGB")
 
-    if rng.random() < min(0.98, 0.42 * severity * profile.lighting_scale):
-        shadow = np.linspace(
-            rng.uniform(0.94, 1.04),
+    if rng.random() < min(0.96, 0.45 * severity * profile.lighting_scale):
+        width, height = image.size
+        band = np.linspace(
+            rng.uniform(0.94, 1.06),
             rng.uniform(0.78, 1.08),
-            composite.shape[1],
+            width,
             dtype=np.float32,
         )
-        composite *= shadow[None, :]
+        shaded = np.asarray(image, dtype=np.float32)
+        shaded *= band[None, :, None]
+        image = Image.fromarray(np.clip(shaded, 0.0, 255.0).astype(np.uint8))
 
-    if rng.random() < min(0.98, 0.42 * severity * profile.texture_scale):
-        column_noise = rng.normal(
-            0.0,
-            4.0 * severity * profile.texture_scale,
-            size=(1, composite.shape[1]),
+    if rng.random() < min(0.94, 0.38 * severity * profile.texture_scale):
+        noisy = np.asarray(image, dtype=np.float32)
+        noisy += rng.normal(
+            0.0, 4.0 * severity * profile.texture_scale, size=noisy.shape
         )
-        composite += column_noise
-
-    if rng.random() < min(0.98, 0.42 * severity * profile.texture_scale):
-        row_noise = rng.normal(
-            0.0,
-            4.0 * severity * profile.texture_scale,
-            size=(composite.shape[0], 1),
-        )
-        composite += row_noise
-
-    composite = np.clip(composite, 0.0, 255.0).astype(np.uint8)
-    image = Image.fromarray(composite)
+        image = Image.fromarray(np.clip(noisy, 0.0, 255.0).astype(np.uint8))
 
     blur_limit = (0.55 if split == "train" else 0.85) * severity * profile.blur_scale
-    if rng.random() < min(0.98, 0.42 * profile.blur_scale):
-        image = image.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(0.5, 2.4) * blur_limit)))
-    if rng.random() < min(0.98, 0.28 * profile.blur_scale):
+    if rng.random() < min(0.96, 0.46 * profile.blur_scale):
+        image = image.filter(
+            ImageFilter.GaussianBlur(radius=float(rng.uniform(0.4, 2.0) * blur_limit))
+        )
+    if rng.random() < min(0.94, 0.20 * profile.blur_scale):
         image = image.filter(ImageFilter.MedianFilter(size=3))
 
     image = image.resize((output_size, output_size), RESAMPLE_LANCZOS)
-    if rng.random() < min(0.98, 0.38 * severity * profile.texture_scale):
-        down = max(28, int(round(output_size * rng.uniform(0.52, 0.88))))
+    if rng.random() < min(0.92, 0.34 * severity * profile.texture_scale):
+        down = max(28, int(round(output_size * rng.uniform(0.56, 0.88))))
         image = image.resize((down, down), RESAMPLE_BILINEAR).resize(
             (output_size, output_size), RESAMPLE_LANCZOS
         )
@@ -426,18 +435,6 @@ def _choose_source_path(
     return weighted[int(rng.integers(0, len(weighted)))]
 
 
-def _prepare_source_mask(
-    source_path: Path,
-    *,
-    canvas_size: int,
-    rng: np.random.Generator,
-) -> Image.Image:
-    grayscale = _open_grayscale(source_path)
-    mask = _threshold_mask(grayscale)
-    scale = float(rng.uniform(0.62, 0.84))
-    return _fit_mask(mask, canvas_size=canvas_size, scale=scale)
-
-
 def render_symbol(
     *,
     alphabet_path: Path,
@@ -456,17 +453,18 @@ def render_symbol(
         real_paths=real_paths,
         rng=rng,
     )
-    mask = _prepare_source_mask(
-        source_path,
+    overlay = _fit_overlay(
+        _open_rgba(source_path),
         canvas_size=config.canvas_size,
-        rng=rng,
+        scale=float(rng.uniform(0.60, 0.84)),
     )
-    mask = _apply_affine(mask, rng, severity, profile)
-    if rng.random() < min(0.98, 0.36 * severity * profile.warp_scale):
-        mask = _apply_perspective(mask, rng, severity, profile)
-    mask = _apply_damage(mask, rng, severity, split, profile)
-    return _compose_scan(
-        mask=mask,
+    overlay = _apply_affine(overlay, rng, severity, profile)
+    if rng.random() < min(0.96, 0.34 * severity * profile.warp_scale):
+        overlay = _apply_perspective(overlay, rng, severity, profile)
+    overlay = _apply_overlay_damage(overlay, rng, severity, profile)
+    overlay = _tint_overlay(overlay, rng, severity, profile)
+    return _compose_image(
+        overlay,
         texture_paths=texture_paths,
         rng=rng,
         severity=severity,
@@ -476,25 +474,32 @@ def render_symbol(
     )
 
 
-def _prepare_real_image(source_path: Path, output_size: int) -> Image.Image:
-    mask = _threshold_mask(_open_grayscale(source_path))
-    fitted = _fit_mask(mask, canvas_size=max(output_size * 2, 128), scale=0.80)
-    return _compose_scan(
-        mask=fitted,
-        texture_paths=(),
-        rng=np.random.default_rng(0),
-        severity=0.60,
-        split="val",
-        profile=GENERATION_PROFILES["clean"],
-        output_size=output_size,
+def _fit_rgb_square(image: Image.Image, output_size: int) -> Image.Image:
+    target = Image.new("RGB", (output_size, output_size), RGB_WHITE)
+    image = ImageOps.exif_transpose(image.convert("RGB"))
+    image = ImageOps.autocontrast(image)
+    fit = ImageOps.contain(image, (output_size, output_size), RESAMPLE_LANCZOS)
+    offset = (
+        (output_size - fit.width) // 2,
+        (output_size - fit.height) // 2,
     )
+    target.paste(fit, offset)
+    return target
+
+
+def _prepare_real_image(source_path: Path, output_size: int) -> Image.Image:
+    with Image.open(source_path) as image:
+        prepared = _fit_rgb_square(image, output_size)
+    prepared = ImageEnhance.Color(prepared).enhance(1.02)
+    prepared = ImageEnhance.Contrast(prepared).enhance(1.04)
+    return prepared
 
 
 def _make_preview_sheet(images: list[Image.Image]) -> Image.Image:
     tile_size = images[0].size[0]
     columns = min(4, len(images))
     rows = int(np.ceil(len(images) / columns))
-    sheet = Image.new("L", (columns * tile_size, rows * tile_size), 245)
+    sheet = Image.new("RGB", (columns * tile_size, rows * tile_size), RGB_WHITE)
     for index, image in enumerate(images):
         x = (index % columns) * tile_size
         y = (index // columns) * tile_size
@@ -524,7 +529,7 @@ def _save_preview_sheets(output_dir: Path, preview_buckets: dict) -> dict:
 
 def _reset_output_dir(output_dir: Path, class_assets: list[ClassAssets]) -> None:
     managed_paths = [output_dir / "metadata.json", output_dir / "preview"]
-    for split in ("train", "val", "realtrain", "realval"):
+    for split in (TRAIN_SPLIT, VAL_SPLIT, R_TRAIN_SPLIT, R_VAL_SPLIT):
         for assets in class_assets:
             managed_paths.append(output_dir / split / assets.label_dir)
 
@@ -584,7 +589,10 @@ def _build_class_dataset(
             )
             image.save(out_path)
 
-    for split_name, count in (("train", config.train_per_class), ("val", config.val_per_class)):
+    for split_name, count in (
+        ("train", config.train_per_class),
+        ("val", config.val_per_class),
+    ):
         for split_index in range(count):
             profile = _choose_profile(rng, split_name, split_profiles[split_name])
             image = render_symbol(
@@ -616,7 +624,7 @@ def _build_class_dataset(
         label_dir=assets.label_dir,
         name=assets.name,
         synthetic_count=config.train_per_class + config.val_per_class,
-        real_count=len(real_split["realtrain"]) + len(real_split["realval"]),
+        real_count=len(real_split[R_TRAIN_SPLIT]) + len(real_split[R_VAL_SPLIT]),
         profile_histogram=profile_histogram,
         previews={
             split_name: {
@@ -649,8 +657,8 @@ def build_dataset(config: DataGenConfig) -> dict:
     _reset_output_dir(config.output_dir, class_assets)
 
     split_profiles = {
-        "train": _resolve_profile_names("train", config.train_profiles),
-        "val": _resolve_profile_names("val", config.val_profiles),
+        TRAIN_SPLIT: _resolve_profile_names(TRAIN_SPLIT, config.train_profiles),
+        VAL_SPLIT: _resolve_profile_names(VAL_SPLIT, config.val_profiles),
     }
     preview_buckets = {
         (split, profile_name): []
@@ -662,15 +670,17 @@ def build_dataset(config: DataGenConfig) -> dict:
         for split, profile_names in split_profiles.items()
     }
 
-    for split in ("train", "val", "realtrain", "realval"):
+    for split in (TRAIN_SPLIT, VAL_SPLIT, R_TRAIN_SPLIT, R_VAL_SPLIT):
         for assets in class_assets:
             ensure_dir(config.output_dir / split / assets.label_dir)
 
-    total_synthetic = (config.train_per_class + config.val_per_class) * len(class_assets)
+    total_synthetic = (config.train_per_class + config.val_per_class) * len(
+        class_assets
+    )
     progress = create_progress(
         range(total_synthetic),
         command="gen",
-        scope="build",
+        scope="run",
         color="green",
         leave=False,
         total=total_synthetic,
@@ -692,16 +702,10 @@ def build_dataset(config: DataGenConfig) -> dict:
             for profile_name, count in split_histogram.items():
                 profile_histogram[split_name][profile_name] += count
         _merge_preview_buckets(
-            preview_buckets,
-            result.previews,
-            config.preview_samples_per_group,
+            preview_buckets, result.previews, config.preview_samples_per_group
         )
         progress.set_postfix_str(
-            (
-                f"class {result.name} | "
-                f"classes {completed_classes}/{len(class_assets)} | "
-                f"jobs {jobs}"
-            ),
+            f"class {result.name} | classes {completed_classes}/{len(class_assets)} | jobs {jobs}",
             refresh=False,
         )
         pending_results[result.index] = result
@@ -709,23 +713,14 @@ def build_dataset(config: DataGenConfig) -> dict:
             ready_result = pending_results.pop(next_result_index)
             write_progress_line(
                 progress,
-                (
-                    f"gen ready {ready_result.label_dir} | "
-                    f"synthetic {ready_result.synthetic_count} | "
-                    f"real {ready_result.real_count}"
-                ),
+                f"gen ready {ready_result.label_dir} | synthetic {ready_result.synthetic_count} | real {ready_result.real_count}",
             )
             next_result_index += 1
 
     if jobs == 1:
         for assets in class_assets:
             handle_result(
-                _build_class_dataset(
-                    assets,
-                    config,
-                    texture_paths,
-                    split_profiles,
-                )
+                _build_class_dataset(assets, config, texture_paths, split_profiles)
             )
     else:
         try:
@@ -740,7 +735,9 @@ def build_dataset(config: DataGenConfig) -> dict:
                     )
                     for assets in class_assets
                 ]
-                for completed_index, future in enumerate(as_completed(futures), start=1):
+                for completed_index, future in enumerate(
+                    as_completed(futures), start=1
+                ):
                     result = future.result()
                     progress.set_postfix_str(
                         f"classes {completed_index}/{len(class_assets)} | jobs {jobs}",
@@ -749,7 +746,7 @@ def build_dataset(config: DataGenConfig) -> dict:
                     handle_result(result)
         except (OSError, PermissionError):
             _reset_output_dir(config.output_dir, class_assets)
-            for split in ("train", "val", "realtrain", "realval"):
+            for split in (TRAIN_SPLIT, VAL_SPLIT, R_TRAIN_SPLIT, R_VAL_SPLIT):
                 for assets in class_assets:
                     ensure_dir(config.output_dir / split / assets.label_dir)
             jobs = 1
@@ -766,17 +763,11 @@ def build_dataset(config: DataGenConfig) -> dict:
                 for split, profile_names in split_profiles.items()
             }
             progress.set_postfix_str(
-                f"classes 0/{len(class_assets)} | jobs {jobs}",
-                refresh=False,
+                f"classes 0/{len(class_assets)} | jobs {jobs}", refresh=False
             )
             for assets in class_assets:
                 handle_result(
-                    _build_class_dataset(
-                        assets,
-                        config,
-                        texture_paths,
-                        split_profiles,
-                    )
+                    _build_class_dataset(assets, config, texture_paths, split_profiles)
                 )
 
     progress.close()
@@ -786,16 +777,16 @@ def build_dataset(config: DataGenConfig) -> dict:
         real_val_fraction=config.real_val_fraction,
     )
 
-    realtrain_total = sum(
-        len(list((config.output_dir / "realtrain" / assets.label_dir).glob("*.png")))
+    r_train_total = sum(
+        len(list((config.output_dir / R_TRAIN_SPLIT / assets.label_dir).glob("*.png")))
         for assets in class_assets
     )
-    realval_total = sum(
-        len(list((config.output_dir / "realval" / assets.label_dir).glob("*.png")))
+    r_val_total = sum(
+        len(list((config.output_dir / R_VAL_SPLIT / assets.label_dir).glob("*.png")))
         for assets in class_assets
     )
     metadata = {
-        "version": 2,
+        "version": 3,
         "jobs": jobs,
         "num_classes": len(class_assets),
         "class_names": [assets.name for assets in class_assets],
@@ -803,20 +794,21 @@ def build_dataset(config: DataGenConfig) -> dict:
         "train_per_class": config.train_per_class,
         "val_per_class": config.val_per_class,
         "image_size": config.output_size,
+        "color_mode": "rgb",
         "synthetic_total_images": total_synthetic,
-        "real_total_images": realtrain_total + realval_total,
-        "total_images": total_synthetic + realtrain_total + realval_total,
-        "primary_validation_split": "realval" if realval_total > 0 else "val",
+        "real_total_images": r_train_total + r_val_total,
+        "total_images": total_synthetic + r_train_total + r_val_total,
+        "primary_validation_split": R_VAL_SPLIT if r_val_total > 0 else VAL_SPLIT,
         "real_val_fraction": config.real_val_fraction,
-        "train_profiles": list(split_profiles["train"]),
-        "val_profiles": list(split_profiles["val"]),
+        "train_profiles": list(split_profiles[TRAIN_SPLIT]),
+        "val_profiles": list(split_profiles[VAL_SPLIT]),
         "profile_histogram": profile_histogram,
         "preview_sheets": preview_sheets,
         "source": source_manifest,
         "notes": [
-            "Synthetic images are generated from canonical exemplars and real crops.",
-            "Real images are copied into dataset/realtrain and dataset/realval.",
-            "Primary validation should use realval when available.",
+            "Synthetic images are composited from exemplar and real source images.",
+            "Real images are copied into dataset/r_train and dataset/r_val with light RGB normalization only.",
+            "Primary validation should use r_val when available.",
         ],
     }
     save_json(config.output_dir / "metadata.json", metadata)

@@ -1,17 +1,17 @@
 # Glyph
 
-`Glyph` is a CLI for classifying printed Aramaic letters from real images.
+`Glyph` is a CLI for classifying printed Aramaic letters from RGB images.
 
 The project is built around **real crops and canonical exemplars**.
 
 ## What It Does
 
-- builds a synthetic dataset from canonical letter exemplars
-- copies real crops into `realtrain` and `realval`
+- builds RGB dataset splits from exemplar and real letter images
+- keeps real crops in `r_train` and `r_val` with light preprocessing only
 - trains a classifier against a real validation split
 - validates checkpoints
 - predicts one image
-- scans or benchmarks image folders
+- scans image folders or runs labeled benchmarks
 
 ## Quick Start
 
@@ -32,21 +32,21 @@ Predict one image:
 
 `Glyph` uses four dataset splits:
 
-- `train/` — synthetic training images
-- `val/` — synthetic validation images
-- `realtrain/` — real cropped letters for training support
-- `realval/` — real cropped letters for primary validation
+- `train/` — generated RGB training images
+- `val/` — generated RGB validation images
+- `r_train/` — real cropped letters for training support
+- `r_val/` — real cropped letters for primary validation
 
-When `realval/` exists, it is treated as the main validation split.
+When `r_val/` exists, it is treated as the main validation split.
 
 ## Source Assets
 
 Project assets live in `source/`:
 
-- `source/alphabet/` — canonical reference images
+- `source/alphabet/` — reference glyph images
 - `source/exemplars/` — exemplar letter variants
 - `source/real/` — real cropped letters
-- `source/textures/` — texture backgrounds for synthetic generation
+- `source/textures/` — texture backgrounds for RGB synthetic generation
 
 ## Main Commands
 
@@ -63,7 +63,7 @@ Project assets live in `source/`:
 
 ## Useful Short Runs
 
-Small dataset build:
+Small dataset run:
 
 ```bash
 ./glyph gen --train 50 --val 10

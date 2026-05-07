@@ -62,7 +62,9 @@ def get_available_backbones() -> tuple[str, ...]:
 def get_backbone_spec(backbone_name: str) -> BackboneSpec:
     if backbone_name not in BACKBONE_SPECS:
         available = ", ".join(BACKBONE_SPECS)
-        raise ValueError(f"Unsupported backbone {backbone_name!r}. Available: {available}")
+        raise ValueError(
+            f"Unsupported backbone {backbone_name!r}. Available: {available}"
+        )
     return BACKBONE_SPECS[backbone_name]
 
 
@@ -76,17 +78,16 @@ def _find_last_conv_layer(module: nn.Module) -> nn.Module | None:
     return None
 
 
-def _convert_conv_to_grayscale(
+def _resize_stem_conv(
     conv: nn.Conv2d,
     *,
-    pretrained: bool,
     kernel_size: int | None = None,
     stride: int | tuple[int, int] | None = None,
     padding: int | tuple[int, int] | None = None,
 ) -> nn.Conv2d:
     kernel = kernel_size if kernel_size is not None else conv.kernel_size[0]
     new_conv = nn.Conv2d(
-        in_channels=1,
+        in_channels=conv.in_channels,
         out_channels=conv.out_channels,
         kernel_size=kernel,
         stride=stride if stride is not None else conv.stride,
@@ -96,21 +97,22 @@ def _convert_conv_to_grayscale(
         bias=conv.bias is not None,
         padding_mode=conv.padding_mode,
     )
-    if pretrained:
-        with torch.no_grad():
-            averaged = conv.weight.mean(dim=1, keepdim=True)
-            if kernel != conv.kernel_size[0]:
-                center = conv.kernel_size[0] // 2
-                radius = kernel // 2
-                averaged = averaged[
+    with torch.no_grad():
+        if kernel == conv.kernel_size[0]:
+            new_conv.weight.copy_(conv.weight)
+        else:
+            center = conv.kernel_size[0] // 2
+            radius = kernel // 2
+            new_conv.weight.copy_(
+                conv.weight[
                     :,
                     :,
                     center - radius : center + radius + 1,
                     center - radius : center + radius + 1,
                 ]
-            new_conv.weight.copy_(averaged)
-            if conv.bias is not None and new_conv.bias is not None:
-                new_conv.bias.copy_(conv.bias)
+            )
+        if conv.bias is not None and new_conv.bias is not None:
+            new_conv.bias.copy_(conv.bias)
     return new_conv
 
 
@@ -132,19 +134,13 @@ class ImperialAramaicClassifier(nn.Module):
         if spec.family == "resnet":
             original_conv = model.conv1
             if small_image_stem:
-                model.conv1 = _convert_conv_to_grayscale(
+                model.conv1 = _resize_stem_conv(
                     original_conv,
-                    pretrained=pretrained,
                     kernel_size=3,
                     stride=1,
                     padding=1,
                 )
                 model.maxpool = nn.Identity()
-            else:
-                model.conv1 = _convert_conv_to_grayscale(
-                    original_conv,
-                    pretrained=pretrained,
-                )
             in_features = model.fc.in_features
             model.fc = nn.Sequential(
                 nn.Dropout(p=dropout),
@@ -152,11 +148,6 @@ class ImperialAramaicClassifier(nn.Module):
             )
             feature_root = model.layer4
         elif spec.family == "efficientnet":
-            original_conv = model.features[0][0]
-            model.features[0][0] = _convert_conv_to_grayscale(
-                original_conv,
-                pretrained=pretrained,
-            )
             in_features = model.classifier[-1].in_features
             model.classifier = nn.Sequential(
                 nn.Dropout(p=dropout),
@@ -164,11 +155,6 @@ class ImperialAramaicClassifier(nn.Module):
             )
             feature_root = model.features
         elif spec.family == "mobilenet_v3":
-            original_conv = model.features[0][0]
-            model.features[0][0] = _convert_conv_to_grayscale(
-                original_conv,
-                pretrained=pretrained,
-            )
             in_features = model.classifier[-1].in_features
             model.classifier = nn.Sequential(
                 model.classifier[0],

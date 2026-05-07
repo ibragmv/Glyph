@@ -99,10 +99,7 @@ def cosmic_orange_block(text: object) -> str:
 
     lines = raw.splitlines()
     visible_columns = [
-        col
-        for line in lines
-        for col, char in enumerate(line)
-        if not char.isspace()
+        col for line in lines for col, char in enumerate(line) if not char.isspace()
     ]
     if not visible_columns:
         return raw
@@ -129,9 +126,7 @@ def cosmic_orange_block(text: object) -> str:
             red, green, blue = _blend_rgb(
                 palette[index], palette[index + 1], local_ratio
             )
-            chunks.append(
-                f"{BOLD}{_rgb(red, green, blue)}{char}{RESET}"
-            )
+            chunks.append(f"{BOLD}{_rgb(red, green, blue)}{char}{RESET}")
         rendered.append("".join(chunks))
     return "\n".join(rendered)
 
@@ -147,7 +142,6 @@ def channel_label(channel: str, tone: str = "info") -> str:
         return warn("[warning]")
     if tone == "success":
         palette = {
-            "build": accent(channel),
             "gen": ok(channel),
             "train": ok(channel),
             "val": info(channel),
@@ -159,7 +153,6 @@ def channel_label(channel: str, tone: str = "info") -> str:
         return palette.get(channel, ok(channel))
 
     palette = {
-        "build": accent(channel),
         "gen": accent(channel),
         "train": info(channel),
         "val": warn(channel),
@@ -206,7 +199,13 @@ def print_log(
         print(f"{prefix} {message}")
         return
 
-    prefix_plain = "[error]" if tone == "error" else "[warning]" if tone == "warn" else f"{channel} "
+    prefix_plain = (
+        "[error]"
+        if tone == "error"
+        else "[warning]"
+        if tone == "warn"
+        else f"{channel} "
+    )
     lines = _wrap_plain_text(message, _terminal_width() - len(prefix_plain) - 1)
     print(f"{prefix} {lines[0]}")
     continuation = " " * (len(prefix_plain) + 1)
@@ -266,7 +265,7 @@ def create_progress(
         colour=color,
         desc=f"› {command} {scope}",
         bar_format=(
-            "{desc:<28} {bar:24} "
+            "{desc:<22} {bar:18} "
             "{percentage:3.0f}% | {n_fmt}/{total_fmt} | {elapsed}<{remaining} | {postfix}"
         ),
     )

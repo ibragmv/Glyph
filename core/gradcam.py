@@ -55,14 +55,15 @@ class GradCAM:
 
 
 def overlay_heatmap(
-    grayscale_image: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45
+    image: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45
 ) -> np.ndarray:
     import matplotlib.pyplot as plt
 
-    grayscale = grayscale_image.astype(np.float32)
-    grayscale -= grayscale.min()
-    grayscale /= grayscale.max() + 1e-8
-    grayscale_rgb = np.stack([grayscale, grayscale, grayscale], axis=-1)
+    rgb = image.astype(np.float32)
+    if rgb.ndim == 2:
+        rgb = np.stack([rgb, rgb, rgb], axis=-1)
+    rgb -= rgb.min()
+    rgb /= rgb.max() + 1e-8
     heatmap_rgb = plt.get_cmap("inferno")(heatmap)[..., :3]
-    overlay = (1.0 - alpha) * grayscale_rgb + alpha * heatmap_rgb
+    overlay = (1.0 - alpha) * rgb + alpha * heatmap_rgb
     return np.clip(overlay, 0.0, 1.0)

@@ -8,6 +8,8 @@ from core.constants import (
     ALPHABET,
     ALPHABET_ROOT,
     EXEMPLAR_ROOT,
+    R_TRAIN_SPLIT,
+    R_VAL_SPLIT,
     REAL_ROOT,
     TEXTURE_ROOT,
 )
@@ -61,9 +63,9 @@ def split_real_paths(
     val_fraction: float,
 ) -> dict[str, tuple[Path, ...]]:
     if not paths:
-        return {"realtrain": (), "realval": ()}
+        return {R_TRAIN_SPLIT: (), R_VAL_SPLIT: ()}
     if val_fraction <= 0.0:
-        return {"realtrain": paths, "realval": ()}
+        return {R_TRAIN_SPLIT: paths, R_VAL_SPLIT: ()}
 
     ordered = list(paths)
     # Deterministic shuffle without depending on Python's randomized hash seed.
@@ -81,7 +83,7 @@ def split_real_paths(
         val_count = min(val_count, len(keyed) - 1)
     val_paths = tuple(keyed[:val_count])
     train_paths = tuple(keyed[val_count:])
-    return {"realtrain": train_paths, "realval": val_paths}
+    return {R_TRAIN_SPLIT: train_paths, R_VAL_SPLIT: val_paths}
 
 
 def build_source_manifest(*, seed: int, real_val_fraction: float) -> dict:
@@ -101,8 +103,8 @@ def build_source_manifest(*, seed: int, real_val_fraction: float) -> dict:
                 "alphabet_path": str(assets.alphabet_path),
                 "exemplars": [str(path) for path in assets.exemplar_paths],
                 "real_paths": [str(path) for path in assets.real_paths],
-                "realtrain_paths": [str(path) for path in split["realtrain"]],
-                "realval_paths": [str(path) for path in split["realval"]],
+                "r_train_paths": [str(path) for path in split[R_TRAIN_SPLIT]],
+                "r_val_paths": [str(path) for path in split[R_VAL_SPLIT]],
             }
         )
     return {

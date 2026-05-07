@@ -43,6 +43,7 @@ from core.runtime import (
 from core.utils import (
     compute_image_mean_std,
     ensure_dir,
+    format_channels,
     format_float,
     format_percent,
     list_image_files,
@@ -64,18 +65,8 @@ def build_optimizer(model: nn.Module, lr: float, device: RuntimeDevice) -> Adam:
     return Adam(model.parameters(), lr=lr)
 
 
-def format_signed_delta(value: float, digits: int = 4) -> str:
-    return f"{value:+.{digits}f}"
-
-
 def format_signed_percentage_points(value: float, digits: int = 2) -> str:
     return f"{value * 100:+.{digits}f}pp"
-
-
-def format_optional_signed_delta(value: Optional[float], digits: int = 4) -> str:
-    if value is None:
-        return "n/a"
-    return format_signed_delta(value, digits=digits)
 
 
 def format_optional_signed_percentage_points(
@@ -86,12 +77,16 @@ def format_optional_signed_percentage_points(
     return format_signed_percentage_points(value, digits=digits)
 
 
+def format_rgb_triplet(values: tuple[float, float, float], digits: int = 4) -> str:
+    return ", ".join(f"{value:.{digits}f}" for value in values)
+
+
 def create_dataloaders(
     data_dir: Path,
     batch_size: int,
     num_workers: int | None,
-    mean: float,
-    std: float,
+    mean: tuple[float, float, float],
+    std: tuple[float, float, float],
     *,
     runtime_device: RuntimeDevice,
 ) -> tuple[DataLoader, DataLoader, tuple[str, ...], str]:
@@ -107,9 +102,7 @@ def create_dataloaders(
         for split in train_splits
     ]
     train_dataset = (
-        train_datasets[0]
-        if len(train_datasets) == 1
-        else ConcatDataset(train_datasets)
+        train_datasets[0] if len(train_datasets) == 1 else ConcatDataset(train_datasets)
     )
     val_dataset = ImperialAramaicDataset(
         root=data_dir,
@@ -214,7 +207,9 @@ def collect_logits_and_labels(
             images = prepare_image_batch(images, device)
             logits = model(images)
             logits_chunks.append(logits.detach())
-            label_chunks.append(labels.to(device.device, non_blocking=device.pin_memory))
+            label_chunks.append(
+                labels.to(device.device, non_blocking=device.pin_memory)
+            )
     return torch.cat(logits_chunks, dim=0), torch.cat(label_chunks, dim=0)
 
 
@@ -247,9 +242,7 @@ def fit_temperature_scaling(
     final_temperature = max(float(temperature.detach().item()), 1e-3)
     calibrated_logits = apply_temperature(logits, final_temperature)
     after_nll = float(F.cross_entropy(calibrated_logits, labels).item())
-    after_acc = float(
-        (calibrated_logits.argmax(dim=1) == labels).float().mean().item()
-    )
+    after_acc = float((calibrated_logits.argmax(dim=1) == labels).float().mean().item())
     return {
         "enabled": True,
         "method": "temperature_scaling",
@@ -323,23 +316,23 @@ def run_epoch(
         sample_count += batch_size
 
         if overall_progress is not None:
-            stage = "train" if is_train else "val"
+            stage = "tr" if is_train else "va"
             overall_progress.update(1)
             overall_progress.set_postfix_str(
                 (
-                    f"epoch {epoch_index}/{total_epochs} | "
-                    f"stage {stage} | "
+                    f"ep {epoch_index}/{total_epochs} | "
+                    f"{stage} | "
                     f"loss {running_loss / max(sample_count, 1):.4f} | "
                     f"acc {format_percent(running_correct / max(sample_count, 1))}"
                 ),
                 refresh=False,
             )
         if epoch_progress is not None:
-            stage = "train" if is_train else "val"
+            stage = "tr" if is_train else "va"
             epoch_progress.update(1)
             epoch_progress.set_postfix_str(
                 (
-                    f"stage {stage} | "
+                    f"{stage} | "
                     f"loss {running_loss / max(sample_count, 1):.4f} | "
                     f"acc {format_percent(running_correct / max(sample_count, 1))}"
                 ),
@@ -405,7 +398,9 @@ def build_epoch_record(
         "learning_rate": format_float(learning_rate),
         "train_val_loss_gap": format_float(loss_gap),
         "train_val_acc_gap": format_float(acc_gap),
-        "val_loss_delta": None if val_loss_delta is None else format_float(val_loss_delta),
+        "val_loss_delta": None
+        if val_loss_delta is None
+        else format_float(val_loss_delta),
         "val_acc_delta": None if val_acc_delta is None else format_float(val_acc_delta),
         "best_epoch_so_far": best_epoch,
         "best_val_acc_so_far": format_float(best_val_acc),
@@ -497,8 +492,12 @@ def plot_generalization_diagnostics(history: dict, output_path: Path) -> None:
     axes[0].set_ylabel("Gap")
     axes[0].grid(axis="y", alpha=0.2)
 
-    axes[1].bar(epochs, val_acc_delta, label="val_acc delta", color="#4cc9f0", alpha=0.8)
-    axes[1].plot(epochs, val_loss_delta, label="val_loss delta", color="#f72585", linewidth=2)
+    axes[1].bar(
+        epochs, val_acc_delta, label="val_acc delta", color="#4cc9f0", alpha=0.8
+    )
+    axes[1].plot(
+        epochs, val_loss_delta, label="val_loss delta", color="#f72585", linewidth=2
+    )
     axes[1].axhline(0.0, color="black", linewidth=1, alpha=0.35)
     axes[1].set_title("Validation Quality Change")
     axes[1].set_xlabel("Epoch")
@@ -641,8 +640,8 @@ def build_training_metadata(
     loss_config: dict[str, Any],
     calibration_config: dict[str, Any],
     device: RuntimeDevice,
-    mean: float,
-    std: float,
+    mean: tuple[float, float, float],
+    std: tuple[float, float, float],
     history: dict,
     best_path: Path,
     last_path: Path,
@@ -739,7 +738,7 @@ def build_training_metadata(
             "training_metadata_json": str(output_dir / "training_metadata.json"),
         },
         "history": history,
-}
+    }
 
 
 def save_checkpoint(
@@ -798,8 +797,8 @@ def train_model(
     for split in train_splits:
         training_image_paths.extend(list_image_files(data_dir / split))
     mean, std = compute_image_mean_std(training_image_paths)
-    mean = format_float(mean)
-    std = format_float(std)
+    mean = format_channels(mean)
+    std = format_channels(std)
     image_size = resolve_dataset_image_size(data_dir, training_image_paths)
 
     resolved_num_workers = resolve_num_workers(num_workers)
@@ -900,8 +899,8 @@ def train_model(
             ("label_smoothing", f"{label_smoothing:.3f}"),
             ("temp_scaling", "on" if temperature_scaling else "off"),
             ("output", display_path(output_dir)),
-            ("mean", f"{mean:.4f}"),
-            ("std", f"{std:.4f}"),
+            ("mean", format_rgb_triplet(mean)),
+            ("std", format_rgb_triplet(std)),
         ],
     )
     overall_progress = create_progress(
@@ -912,7 +911,7 @@ def train_model(
         total=total_steps,
         position=0,
     )
-    overall_progress.set_postfix_str(f"epoch 0/{epochs}")
+    overall_progress.set_postfix_str(f"ep 0/{epochs}")
     overall_progress.refresh()
 
     for epoch in range(1, epochs + 1):
@@ -924,7 +923,7 @@ def train_model(
             total=len(train_loader) + len(val_loader),
             position=1,
         )
-        epoch_progress.set_postfix_str("stage train")
+        epoch_progress.set_postfix_str("tr")
         epoch_progress.refresh()
         train_loss, train_acc = run_epoch(
             model=model,
@@ -982,29 +981,29 @@ def train_model(
         print_log(
             "train",
             (
-                f"epoch {epoch:02d}/{epochs} | "
-                f"train_loss {train_loss:.4f} | train_acc {format_percent(train_acc)} | "
-                f"val_loss {val_loss:.4f} ({format_optional_signed_delta(epoch_record['val_loss_delta'])}) | "
-                f"val_acc {format_percent(val_acc)} ({format_optional_signed_percentage_points(epoch_record['val_acc_delta'])}) | "
+                f"ep {epoch:02d}/{epochs} | "
+                f"tr {format_percent(train_acc)} {train_loss:.4f} | "
+                f"va {format_percent(val_acc)} {val_loss:.4f} | "
+                f"dva {format_optional_signed_percentage_points(epoch_record['val_acc_delta'])} | "
                 f"gap {format_signed_percentage_points(epoch_record['train_val_acc_gap'])} | "
                 f"lr {epoch_record['learning_rate']:.6f} | "
-                f"best ep {best_epoch:02d} {format_percent(best_val_acc)}"
+                f"best {best_epoch:02d} {format_percent(best_val_acc)}"
             ),
         )
         write_progress_line(
             overall_progress,
             (
-                f"train ready epoch {epoch:02d}/{epochs} | "
-                f"train_acc {format_percent(train_acc)} | "
-                f"val_acc {format_percent(val_acc)} | "
+                f"train ready ep {epoch:02d}/{epochs} | "
+                f"tr {format_percent(train_acc)} | "
+                f"va {format_percent(val_acc)} | "
                 f"gap {format_signed_percentage_points(epoch_record['train_val_acc_gap'])} | "
-                f"best ep {best_epoch:02d}"
+                f"best {best_epoch:02d}"
             ),
         )
         epoch_progress.set_postfix_str(
             (
-                f"done | train_acc {format_percent(train_acc)} | "
-                f"val_acc {format_percent(val_acc)} | "
+                f"done | tr {format_percent(train_acc)} | "
+                f"va {format_percent(val_acc)} | "
                 f"gap {format_signed_percentage_points(epoch_record['train_val_acc_gap'])}"
             )
         )
@@ -1014,7 +1013,9 @@ def train_model(
             run_id=run_id,
             started_at=run_started_at.isoformat(),
             completed_at=datetime.now(timezone.utc).isoformat(),
-            duration_seconds=(datetime.now(timezone.utc) - run_started_at).total_seconds(),
+            duration_seconds=(
+                datetime.now(timezone.utc) - run_started_at
+            ).total_seconds(),
             data_dir=data_dir,
             output_dir=output_dir,
             train_loader=train_loader,
@@ -1056,7 +1057,7 @@ def train_model(
                 metadata=checkpoint_metadata,
             )
 
-    overall_progress.set_postfix_str(f"epoch {epochs}/{epochs}")
+    overall_progress.set_postfix_str(f"ep {epochs}/{epochs}")
     overall_progress.close()
     plot_history(history, output_dir / "training_curves.png")
     plot_generalization_diagnostics(history, output_dir / "training_diagnostics.png")

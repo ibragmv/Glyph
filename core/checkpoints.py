@@ -43,10 +43,16 @@ def get_checkpoint_class_names(checkpoint: dict[str, Any]) -> list[str]:
     return list(metadata["dataset"]["class_names"])
 
 
-def get_checkpoint_normalization(checkpoint: dict[str, Any]) -> tuple[float, float]:
+def get_checkpoint_normalization(
+    checkpoint: dict[str, Any],
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     metadata = get_checkpoint_metadata(checkpoint)
     normalization = metadata["dataset"]["normalization"]
-    return float(normalization["mean"]), float(normalization["std"])
+    mean = tuple(float(value) for value in normalization["mean"])
+    std = tuple(float(value) for value in normalization["std"])
+    if len(mean) != 3 or len(std) != 3:
+        raise ValueError("Checkpoint normalization must contain three RGB channels.")
+    return mean, std
 
 
 def get_checkpoint_image_size(checkpoint: dict[str, Any]) -> int:

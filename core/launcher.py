@@ -40,7 +40,7 @@ def _write_launcher(output_path: Path, python_executable: Path) -> None:
     output_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def build_launcher(
+def sync_launcher(
     output_path: Path,
     python_executable: Path | None = None,
     project_root: Path | None = None,
@@ -73,13 +73,13 @@ def main() -> None:
     from core.console import display_path, print_banner, print_log
 
     root_dir = Path(__file__).resolve().parent.parent
-    print_banner("make glyph", "launcher build")
-    built_path = build_launcher(
+    print_banner("glyph", "launcher sync")
+    built_path = sync_launcher(
         output_path=root_dir / "glyph",
         python_executable=Path(sys.executable),
         project_root=root_dir,
     )
-    print_log("build", f"complete {display_path(built_path)}", tone="success")
+    print_log("glyph", f"ready {display_path(built_path)}", tone="success")
 
 
 if __name__ == "__main__":

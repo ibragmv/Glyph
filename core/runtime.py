@@ -47,7 +47,7 @@ class RuntimeDevice:
 
     @property
     def supports_channels_last(self) -> bool:
-        return self.type in {"cuda", "mps"}
+        return self.type == "cuda"
 
 
 def _show_runtime_warning(
@@ -70,6 +70,7 @@ def configure_runtime() -> None:
     matplotlib_cache = CACHE_DIR / "matplotlib"
     matplotlib_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
+    os.environ.setdefault("MPLBACKEND", "Agg")
     os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
     warnings.showwarning = _show_runtime_warning
@@ -86,7 +87,8 @@ def configure_runtime() -> None:
 
 def prepare_matplotlib() -> None:
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        importlib.import_module("matplotlib")
+        matplotlib = importlib.import_module("matplotlib")
+        matplotlib.use("Agg", force=True)
         from matplotlib import font_manager
 
         font_manager.findSystemFonts()
@@ -96,7 +98,11 @@ def resolve_runtime_device() -> RuntimeDevice:
     cuda_built = torch.version.cuda is not None
     cuda_available = torch.cuda.is_available()
     cuda_device_count = torch.cuda.device_count() if cuda_available else 0
-    cuda_name = torch.cuda.get_device_name(0) if cuda_available and cuda_device_count > 0 else None
+    cuda_name = (
+        torch.cuda.get_device_name(0)
+        if cuda_available and cuda_device_count > 0
+        else None
+    )
 
     mps_backend = getattr(torch.backends, "mps", None)
     mps_built = bool(mps_backend and mps_backend.is_built())

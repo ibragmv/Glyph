@@ -13,7 +13,14 @@ from core.checkpoints import (
     get_checkpoint_temperature,
     load_model_checkpoint,
 )
-from core.constants import CLASS_NAMES, LABEL_DIRS
+from core.constants import (
+    CLASS_NAMES,
+    LABEL_DIRS,
+    R_TRAIN_SPLIT,
+    R_VAL_SPLIT,
+    TRAIN_SPLIT,
+    VAL_SPLIT,
+)
 from core.datasets import choose_validation_split
 from core.runtime import configure_runtime, prepare_matplotlib, resolve_runtime_device
 from core.source import get_class_assets, get_texture_paths
@@ -32,6 +39,14 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.load(fp)
 
 
+def _display_split_name(value: str) -> str:
+    if value == f"real{TRAIN_SPLIT}":
+        return R_TRAIN_SPLIT
+    if value == f"real{VAL_SPLIT}":
+        return R_VAL_SPLIT
+    return value
+
+
 def inspect_source() -> dict[str, Any]:
     class_assets = get_class_assets()
     texture_paths = get_texture_paths()
@@ -40,12 +55,16 @@ def inspect_source() -> dict[str, Any]:
 
     status = "ok"
     notes: list[str] = []
-    missing_alphabet = [assets.title for assets in class_assets if not assets.alphabet_path.is_file()]
+    missing_alphabet = [
+        assets.title for assets in class_assets if not assets.alphabet_path.is_file()
+    ]
     missing_real = [assets.title for assets in class_assets if not assets.real_paths]
-    missing_exemplars = [assets.title for assets in class_assets if not assets.exemplar_paths]
+    missing_exemplars = [
+        assets.title for assets in class_assets if not assets.exemplar_paths
+    ]
     if missing_alphabet:
-        status = _merge_status(status, "fail")
-        notes.append(f"missing alphabet png for {', '.join(missing_alphabet[:6])}")
+        status = _merge_status(status, "warn")
+        notes.append(f"missing reference image for {', '.join(missing_alphabet[:6])}")
     if missing_real:
         status = _merge_status(status, "warn")
         notes.append(f"no real crops for {', '.join(missing_real[:6])}")
@@ -81,8 +100,10 @@ def inspect_dataset(data_dir: Path) -> dict[str, Any]:
 
     split_stats: dict[str, Any] = {}
     status = "ok"
-    required_splits = ("train", "val", "realtrain", "realval")
-    missing_splits = [split for split in required_splits if not (data_dir / split).is_dir()]
+    required_splits = (TRAIN_SPLIT, VAL_SPLIT, R_TRAIN_SPLIT, R_VAL_SPLIT)
+    missing_splits = [
+        split for split in required_splits if not (data_dir / split).is_dir()
+    ]
     if missing_splits:
         status = _merge_status(status, "warn")
 
@@ -97,7 +118,9 @@ def inspect_dataset(data_dir: Path) -> dict[str, Any]:
             "dir": str(split_dir),
             "class_dirs": len(present_dirs),
             "images": image_count,
-            "missing_class_dirs": [path.name for path in expected_dirs if not path.is_dir()],
+            "missing_class_dirs": [
+                path.name for path in expected_dirs if not path.is_dir()
+            ],
         }
         if len(present_dirs) != len(CLASS_NAMES):
             status = _merge_status(status, "warn")
@@ -111,7 +134,9 @@ def inspect_dataset(data_dir: Path) -> dict[str, Any]:
         if metadata_payload.get("class_names") != CLASS_NAMES:
             metadata_status = "fail"
             metadata_message = "metadata class names do not match project classes"
-        elif metadata_payload.get("primary_validation_split") != choose_validation_split(data_dir):
+        elif metadata_payload.get(
+            "primary_validation_split"
+        ) != choose_validation_split(data_dir):
             metadata_status = "warn"
             metadata_message = "metadata validation split differs from detected split"
     else:
@@ -123,10 +148,10 @@ def inspect_dataset(data_dir: Path) -> dict[str, Any]:
     return {
         "status": status,
         "message": (
-            f"train {split_stats.get('train', {}).get('images', 0)} | "
-            f"val {split_stats.get('val', {}).get('images', 0)} | "
-            f"realtrain {split_stats.get('realtrain', {}).get('images', 0)} | "
-            f"realval {split_stats.get('realval', {}).get('images', 0)} | "
+            f"train {split_stats.get(TRAIN_SPLIT, {}).get('images', 0)} | "
+            f"val {split_stats.get(VAL_SPLIT, {}).get('images', 0)} | "
+            f"r_train {split_stats.get(R_TRAIN_SPLIT, {}).get('images', 0)} | "
+            f"r_val {split_stats.get(R_VAL_SPLIT, {}).get('images', 0)} | "
             f"total {total_images}"
         ),
         "metadata_message": metadata_message,
@@ -164,7 +189,9 @@ def inspect_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
         status = _merge_status(status, "fail")
         issues.append(f"model metadata says {model_classes} classes")
 
-    dataset_split = metadata.get("dataset", {}).get("val_split", "unknown")
+    dataset_split = _display_split_name(
+        metadata.get("dataset", {}).get("val_split", "unknown")
+    )
     backbone = metadata["model"]["backbone_name"]
     message = (
         f"{backbone} | {len(class_names)} classes | "
@@ -253,7 +280,9 @@ def inspect_project(
         consistency_status = _merge_status(consistency_status, "fail")
         consistency_notes.append("checkpoint classes disagree with project classes")
     if not consistency_notes:
-        consistency_notes.append(f"class count matches canonical alphabet ({len(CLASS_NAMES)})")
+        consistency_notes.append(
+            f"class count matches canonical alphabet ({len(CLASS_NAMES)})"
+        )
 
     status = _merge_status(status, consistency_status)
     checks = [

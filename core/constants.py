@@ -49,3 +49,8 @@ ALPHABET_ROOT = SOURCE_ROOT / "alphabet"
 EXEMPLAR_ROOT = SOURCE_ROOT / "exemplars"
 REAL_ROOT = SOURCE_ROOT / "real"
 TEXTURE_ROOT = SOURCE_ROOT / "textures"
+
+TRAIN_SPLIT = "train"
+VAL_SPLIT = "val"
+R_TRAIN_SPLIT = "r_train"
+R_VAL_SPLIT = "r_val"

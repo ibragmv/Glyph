@@ -69,8 +69,8 @@ def _build_ranked_predictions(
 
 def _read_image_array(image_path: Path, image_size: int) -> np.ndarray:
     with Image.open(image_path) as image:
-        grayscale = image.convert("L").resize((image_size, image_size))
-        return np.asarray(grayscale)
+        rgb = image.convert("RGB").resize((image_size, image_size))
+        return np.asarray(rgb)
 
 
 def _normalize_lookup_key(value: str) -> str:
@@ -176,10 +176,13 @@ def _build_metrics_summary(
         [row["true_label"] in row["top_k"] for row in labeled_rows], dtype=bool
     )
 
-    cm = confusion_matrix(true_indices, pred_indices, labels=list(range(len(class_names))))
+    cm = confusion_matrix(
+        true_indices, pred_indices, labels=list(range(len(class_names)))
+    )
     report = classification_report(
         true_indices,
         pred_indices,
+        labels=list(range(len(class_names))),
         target_names=class_names,
         output_dict=True,
         zero_division=0,

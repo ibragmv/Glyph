@@ -37,7 +37,9 @@ _GLYPH_HELP_ART = "\n".join(
 )
 
 
-def _help_row(label: str, value: str, *, value_style=bright, note: str | None = None) -> str:
+def _help_row(
+    label: str, value: str, *, value_style=bright, note: str | None = None
+) -> str:
     line = f"{dim(label.ljust(11))} {value_style(value)}"
     if note:
         line = f"{line} {dim(note)}"
@@ -50,7 +52,11 @@ def _root_help_header() -> str:
         "",
         cosmic_orange_block(_GLYPH_HELP_ART),
         "",
-        _help_row("Flow:", "gen | train | val | pred | scan | bench | check", value_style=accent_soft),
+        _help_row(
+            "Flow:",
+            "gen | train | val | pred | scan | bench | check",
+            value_style=accent_soft,
+        ),
         _help_row("QA:", "lint | syntax | smoke | qa", value_style=accent_soft),
     ]
     return "\n".join(lines)
@@ -60,8 +66,8 @@ def _command_help_header(prog: str) -> str:
     command_name = prog.split()[-1]
     lines = [f"{accent('›')} {bright(f'{prog} --help')}", ""]
     summaries = {
-        "gen": "build exemplar-driven dataset splits",
-        "train": "train on synthetic plus real splits",
+        "gen": "generate rgb dataset splits from real and exemplar sources",
+        "train": "train on rgb synthetic plus real splits",
         "val": "run validation on the primary split",
         "pred": "predict a single image",
         "scan": "scan a folder and save predictions",
@@ -73,7 +79,9 @@ def _command_help_header(prog: str) -> str:
         "qa": "run lint + syntax + smoke",
     }
     if command_name in summaries:
-        lines.append(_help_row("About:", summaries[command_name], value_style=accent_soft))
+        lines.append(
+            _help_row("About:", summaries[command_name], value_style=accent_soft)
+        )
     return "\n".join(lines)
 
 
@@ -152,7 +160,10 @@ def _configure_scan_parser(parser: argparse.ArgumentParser) -> None:
         "--batch", type=int, default=128, help="batch size for folder processing"
     )
     scan_runtime.add_argument(
-        "--work", type=int, default=None, help="DataLoader worker count; default is auto"
+        "--work",
+        type=int,
+        default=None,
+        help="DataLoader worker count; default is auto",
     )
 
 
@@ -201,7 +212,10 @@ def _configure_bench_parser(parser: argparse.ArgumentParser) -> None:
         "--batch", type=int, default=128, help="batch size for benchmark processing"
     )
     bench_runtime.add_argument(
-        "--work", type=int, default=None, help="DataLoader worker count; default is auto"
+        "--work",
+        type=int,
+        default=None,
+        help="DataLoader worker count; default is auto",
     )
 
 
@@ -247,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen_parser = subparsers.add_parser(
         "gen",
         help="Generate a dataset.",
-        description="Generate synthetic data from canonical exemplars and copy real validation splits.",
+        description="Generate RGB dataset splits from exemplar and real source images.",
         formatter_class=GlyphHelpFormatter,
     )
     gen_paths = gen_parser.add_argument_group("Paths")
@@ -307,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser = subparsers.add_parser(
         "train",
         help="Train a classifier.",
-        description="Train the classifier on synthetic plus real splits and monitor the primary validation split.",
+        description="Train the classifier on RGB synthetic plus real splits and monitor the primary validation split.",
         formatter_class=GlyphHelpFormatter,
     )
     train_paths = train_parser.add_argument_group("Paths")
@@ -388,7 +402,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_runtime = train_parser.add_argument_group("Runtime")
     train_runtime.add_argument(
-        "--work", type=int, default=None, help="dataloader worker count; default is auto"
+        "--work",
+        type=int,
+        default=None,
+        help="dataloader worker count; default is auto",
     )
     train_runtime.add_argument("--seed", type=int, default=42, help="random seed")
     train_parser.set_defaults(handler=handle_train)
@@ -417,7 +434,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch", type=int, default=128, help="evaluation batch size"
     )
     val_runtime.add_argument(
-        "--work", type=int, default=None, help="dataloader worker count; default is auto"
+        "--work",
+        type=int,
+        default=None,
+        help="dataloader worker count; default is auto",
     )
     val_runtime.add_argument(
         "--seed", type=int, default=42, help="seed for sampled visualizations"
@@ -434,9 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
     pred_paths.add_argument(
         "--pt", type=Path, required=True, help="checkpoint file to load"
     )
-    pred_paths.add_argument(
-        "--img", type=Path, required=True, help="input image file"
-    )
+    pred_paths.add_argument("--img", type=Path, required=True, help="input image file")
     pred_output = pred_parser.add_argument_group("Output")
     pred_output.add_argument(
         "--top", type=int, default=3, help="number of ranked predictions to display"
@@ -548,22 +566,20 @@ def handle_gen(args: argparse.Namespace) -> None:
     from core.datagen import DataGenConfig, build_dataset
 
     train_profiles = tuple(
-        profile.strip()
-        for profile in args.tmix.split(",")
-        if profile.strip()
+        profile.strip() for profile in args.tmix.split(",") if profile.strip()
     )
     val_profiles = tuple(
         profile.strip() for profile in args.vmix.split(",") if profile.strip()
     )
 
-    print_banner("glyph gen", "dataset build")
+    print_banner("glyph gen", "dataset run")
     print_summary(
-        "Dataset Build",
+        "Dataset Run",
         [
             ("output", display_path(args.out)),
             ("train/class", args.train),
             ("val/class", args.val),
-            ("realval", f"{args.rval:.2f}"),
+            ("r_val", f"{args.rval:.2f}"),
             ("train_hard", f"{args.thard:.2f}"),
             ("val_hard", f"{args.vhard:.2f}"),
             ("train_profiles", ",".join(train_profiles) or "default"),
@@ -599,10 +615,14 @@ def handle_gen(args: argparse.Namespace) -> None:
             ("train/class", metadata["train_per_class"]),
             ("val/class", metadata["val_per_class"]),
             ("val_split", metadata["primary_validation_split"]),
-            ("preview_groups", sum(len(item) for item in metadata["preview_sheets"].values())),
+            (
+                "preview_groups",
+                sum(len(item) for item in metadata["preview_sheets"].values()),
+            ),
         ],
     )
     print_log("gen", "dataset complete", tone="success")
+
 
 def handle_train(args: argparse.Namespace) -> None:
     if not args.dir.exists():
@@ -841,14 +861,20 @@ def handle_check(args: argparse.Namespace) -> None:
         ],
     )
     for item in report["checks"]:
-        tone = "success" if item["status"] == "ok" else "warn" if item["status"] == "warn" else "error"
+        tone = (
+            "success"
+            if item["status"] == "ok"
+            else "warn"
+            if item["status"] == "warn"
+            else "error"
+        )
         print_log("check", f"{item['name']}: {item['message']}", tone=tone, wrap=True)
 
     if report["status"] == "fail":
         raise SystemExit(1)
     if args.strict and any(item["status"] != "ok" for item in report["checks"]):
         raise SystemExit(1)
-    print_log("check", "setup check passed", tone="success")
+    print_log("check", "setup passed", tone="success")
 
 
 def handle_lint(args: argparse.Namespace) -> None:

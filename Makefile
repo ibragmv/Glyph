@@ -29,4 +29,4 @@ glyph:
 		echo "[glyph] dependencies are up to date"; \
 	fi; \
 	printf 'requirements_sha256=%s\npython_version=%s\n' "$$requirements_sha" "$$current_python_version" >"$(VENV_STAMP)"; \
-	"$(VENV_PYTHON)" -m core.builder
+	"$(VENV_PYTHON)" -m core.launcher

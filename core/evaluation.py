@@ -27,6 +27,18 @@ from core.runtime import (
 from core.utils import ensure_dir, format_percent, save_json
 
 
+def _denormalize_image(
+    image_tensor: torch.Tensor,
+    mean: tuple[float, float, float],
+    std: tuple[float, float, float],
+) -> np.ndarray:
+    image = image_tensor.numpy().transpose(1, 2, 0)
+    mean_array = np.asarray(mean, dtype=np.float32)
+    std_array = np.asarray(std, dtype=np.float32)
+    image = (image * std_array) + mean_array
+    return np.clip(image, 0.0, 1.0)
+
+
 def collect_predictions(
     model: torch.nn.Module,
     loader: DataLoader,
@@ -97,8 +109,8 @@ def plot_random_predictions(
     labels: np.ndarray,
     output_path: Path,
     class_names: list[str],
-    mean: float,
-    std: float,
+    mean: tuple[float, float, float],
+    std: tuple[float, float, float],
     seed: int = 42,
     num_samples: int = 12,
 ) -> list[int]:
@@ -113,12 +125,11 @@ def plot_random_predictions(
 
     for ax, dataset_idx in zip(axes, indices):
         image_tensor, _, _ = dataset[dataset_idx]
-        image = image_tensor.squeeze(0).numpy()
-        image = np.clip((image * std) + mean, 0.0, 1.0)
+        image = _denormalize_image(image_tensor, mean, std)
         predicted_idx = int(preds[dataset_idx])
         true_idx = int(labels[dataset_idx])
         confidence = float(probs[dataset_idx, predicted_idx])
-        ax.imshow(image, cmap="gray")
+        ax.imshow(image)
         ax.set_title(
             f"P:{class_names[predicted_idx]}\nT:{class_names[true_idx]}\n{confidence:.2%}",
             fontsize=9,
@@ -141,8 +152,8 @@ def plot_gradcam_examples(
     output_path: Path,
     indices: list[int],
     class_names: list[str],
-    mean: float,
-    std: float,
+    mean: tuple[float, float, float],
+    std: tuple[float, float, float],
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -159,14 +170,13 @@ def plot_gradcam_examples(
         image_tensor, label, _ = dataset[dataset_idx]
         input_tensor = prepare_image_batch(image_tensor.unsqueeze(0), device)
         heatmap = gradcam.generate(input_tensor)
-        grayscale = image_tensor.squeeze(0).numpy()
-        grayscale = np.clip((grayscale * std) + mean, 0.0, 1.0)
-        overlay = overlay_heatmap(grayscale, heatmap)
+        image = _denormalize_image(image_tensor, mean, std)
+        overlay = overlay_heatmap(image, heatmap)
 
         with torch.inference_mode():
             prediction = model(input_tensor).argmax(dim=1).item()
 
-        axes[row, 0].imshow(grayscale, cmap="gray")
+        axes[row, 0].imshow(image)
         axes[row, 0].set_title(f"Input: {class_names[label]}")
         axes[row, 0].set_axis_off()
 
@@ -233,6 +243,7 @@ def evaluate_model(
     report = classification_report(
         labels,
         preds,
+        labels=list(range(len(class_names))),
         target_names=class_names,
         output_dict=True,
         zero_division=0,

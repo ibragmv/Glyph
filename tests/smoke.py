@@ -15,7 +15,7 @@ from core.checkpoints import (
     get_checkpoint_image_size,
     load_model_checkpoint,
 )
-from core.constants import CLASS_NAMES
+from core.constants import CLASS_NAMES, R_TRAIN_SPLIT, R_VAL_SPLIT
 from core.inference import predict_folder, predict_image
 from core.source import split_real_paths
 
@@ -45,16 +45,23 @@ def test_dataset_generation_smoke(generated_dataset_dir: Path) -> None:
     assert metadata["image_size"] == 64
     assert metadata["synthetic_total_images"] == len(CLASS_NAMES) * 2
     assert metadata["real_total_images"] > 0
-    assert metadata["total_images"] == metadata["synthetic_total_images"] + metadata["real_total_images"]
-    assert metadata["primary_validation_split"] == "realval"
-    assert len(list((generated_dataset_dir / "train").rglob("*.png"))) == len(CLASS_NAMES)
+    assert (
+        metadata["total_images"]
+        == metadata["synthetic_total_images"] + metadata["real_total_images"]
+    )
+    assert metadata["primary_validation_split"] == R_VAL_SPLIT
+    assert len(list((generated_dataset_dir / "train").rglob("*.png"))) == len(
+        CLASS_NAMES
+    )
     assert len(list((generated_dataset_dir / "val").rglob("*.png"))) == len(CLASS_NAMES)
-    assert len(list((generated_dataset_dir / "realval").rglob("*.png"))) > 0
+    assert len(list((generated_dataset_dir / R_VAL_SPLIT).rglob("*.png"))) > 0
     assert metadata["preview_sheets"]
 
 
 def test_checkpoint_load_smoke(smoke_checkpoint_path: Path) -> None:
-    model, checkpoint = load_model_checkpoint(smoke_checkpoint_path, torch.device("cpu"))
+    model, checkpoint = load_model_checkpoint(
+        smoke_checkpoint_path, torch.device("cpu")
+    )
 
     assert model.training is False
     assert checkpoint["metadata"]["model"]["backbone_name"] == "mobilenet_v3_small"
@@ -157,8 +164,8 @@ def test_split_real_paths_allows_zero_validation_fraction() -> None:
 
     split = split_real_paths(paths, seed=7, val_fraction=0.0)
 
-    assert split["realtrain"] == paths
-    assert split["realval"] == ()
+    assert split[R_TRAIN_SPLIT] == paths
+    assert split[R_VAL_SPLIT] == ()
 
 
 def test_predict_image_uses_checkpoint_image_size(
@@ -166,7 +173,7 @@ def test_predict_image_uses_checkpoint_image_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image_path = tmp_path / "sample.png"
-    Image.fromarray(np.full((19, 27), 180, dtype=np.uint8)).save(image_path)
+    Image.fromarray(np.full((19, 27, 3), 180, dtype=np.uint8)).save(image_path)
 
     seen_shapes: list[tuple[int, ...]] = []
 
@@ -180,7 +187,10 @@ def test_predict_image_uses_checkpoint_image_size(
             "model": {"backbone_name": "fake"},
             "dataset": {
                 "class_names": CLASS_NAMES,
-                "normalization": {"mean": 0.5, "std": 0.5},
+                "normalization": {
+                    "mean": [0.5, 0.5, 0.5],
+                    "std": [0.5, 0.5, 0.5],
+                },
                 "image_size": 32,
             },
             "calibration": {"temperature": 1.0},
@@ -199,7 +209,7 @@ def test_predict_image_uses_checkpoint_image_size(
     result = predict_image(checkpoint_path=tmp_path / "fake.pt", image_path=image_path)
 
     assert result["predictions"][0]["label"] in CLASS_NAMES
-    assert seen_shapes == [(1, 1, 32, 32)]
+    assert seen_shapes == [(1, 3, 32, 32)]
 
 
 def test_predict_folder_uses_checkpoint_image_size(
@@ -208,7 +218,9 @@ def test_predict_folder_uses_checkpoint_image_size(
 ) -> None:
     image_dir = tmp_path / "images"
     image_dir.mkdir()
-    Image.fromarray(np.full((21, 17), 200, dtype=np.uint8)).save(image_dir / "one.png")
+    Image.fromarray(np.full((21, 17, 3), 200, dtype=np.uint8)).save(
+        image_dir / "one.png"
+    )
 
     seen_shapes: list[tuple[int, ...]] = []
 
@@ -222,7 +234,10 @@ def test_predict_folder_uses_checkpoint_image_size(
             "model": {"backbone_name": "fake"},
             "dataset": {
                 "class_names": CLASS_NAMES,
-                "normalization": {"mean": 0.5, "std": 0.5},
+                "normalization": {
+                    "mean": [0.5, 0.5, 0.5],
+                    "std": [0.5, 0.5, 0.5],
+                },
                 "image_size": 32,
             },
             "calibration": {"temperature": 1.0},
@@ -248,4 +263,4 @@ def test_predict_folder_uses_checkpoint_image_size(
     )
 
     assert summary["num_images"] == 1
-    assert seen_shapes == [(1, 1, 32, 32)]
+    assert seen_shapes == [(1, 3, 32, 32)]

@@ -56,7 +56,7 @@ def collect_predictions(
             command="val",
             scope="predict",
             color="cyan",
-            leave=False,
+            leave=True,
             total=len(loader),
         )
         for images, labels, paths in iterator:

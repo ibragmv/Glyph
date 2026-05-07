@@ -322,7 +322,7 @@ def predict_folder(
             command=command_name,
             scope="run",
             color="green",
-            leave=False,
+            leave=True,
             total=len(loader),
         )
         for images, paths in iterator:

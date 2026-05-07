@@ -17,14 +17,20 @@ from core.checkpoints import (
 from core.console import create_progress, display_path, print_log, print_summary
 from core.datasets import ImperialAramaicDataset, choose_validation_split
 from core.gradcam import GradCAM, overlay_heatmap
-from core.runtime import configure_runtime
+from core.runtime import (
+    configure_runtime,
+    optimize_model_for_device,
+    prepare_image_batch,
+    resolve_num_workers,
+    resolve_runtime_device,
+)
 from core.utils import ensure_dir, format_percent, save_json
 
 
 def collect_predictions(
     model: torch.nn.Module,
     loader: DataLoader,
-    device: torch.device,
+    device,
     temperature: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     all_probs = []
@@ -42,7 +48,7 @@ def collect_predictions(
             total=len(loader),
         )
         for images, labels, paths in iterator:
-            images = images.to(device, non_blocking=True)
+            images = prepare_image_batch(images, device)
             logits = model(images) / temperature
             probs = torch.softmax(logits, dim=1)
             preds = probs.argmax(dim=1)
@@ -131,7 +137,7 @@ def plot_random_predictions(
 def plot_gradcam_examples(
     model: torch.nn.Module,
     dataset: ImperialAramaicDataset,
-    device: torch.device,
+    device,
     output_path: Path,
     indices: list[int],
     class_names: list[str],
@@ -151,7 +157,7 @@ def plot_gradcam_examples(
 
     for row, dataset_idx in enumerate(indices):
         image_tensor, label, _ = dataset[dataset_idx]
-        input_tensor = image_tensor.unsqueeze(0).to(device)
+        input_tensor = prepare_image_batch(image_tensor.unsqueeze(0), device)
         heatmap = gradcam.generate(input_tensor)
         grayscale = image_tensor.squeeze(0).numpy()
         grayscale = np.clip((grayscale * std) + mean, 0.0, 1.0)
@@ -179,13 +185,15 @@ def evaluate_model(
     checkpoint_path: Path,
     output_dir: Path,
     batch_size: int = 128,
-    num_workers: int = 0,
+    num_workers: int | None = None,
     seed: int = 42,
 ) -> dict:
     configure_runtime()
     ensure_dir(output_dir)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, checkpoint = load_model_checkpoint(checkpoint_path, device)
+    runtime_device = resolve_runtime_device()
+    resolved_num_workers = resolve_num_workers(num_workers)
+    model, checkpoint = load_model_checkpoint(checkpoint_path, runtime_device.device)
+    model = optimize_model_for_device(model, runtime_device)
     class_names = get_checkpoint_class_names(checkpoint)
     mean, std = get_checkpoint_normalization(checkpoint)
     temperature = get_checkpoint_temperature(checkpoint)
@@ -200,14 +208,15 @@ def evaluate_model(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        num_workers=resolved_num_workers,
+        pin_memory=runtime_device.pin_memory,
     )
 
     print_summary(
         "Evaluation Run",
         [
-            ("device", device.type),
+            ("device", runtime_device.label),
+            ("workers", resolved_num_workers),
             ("samples", len(dataset)),
             ("split", val_split),
             ("checkpoint", display_path(checkpoint_path)),
@@ -215,7 +224,7 @@ def evaluate_model(
         ],
     )
     probs, preds, labels, paths = collect_predictions(
-        model, loader, device, temperature
+        model, loader, runtime_device, temperature
     )
     cm = confusion_matrix(labels, preds, labels=list(range(len(class_names))))
     report = classification_report(
@@ -241,7 +250,7 @@ def evaluate_model(
     plot_gradcam_examples(
         model=model,
         dataset=dataset,
-        device=device,
+        device=runtime_device,
         output_path=output_dir / "gradcam_examples.png",
         indices=selected_indices[: min(6, len(selected_indices))],
         class_names=class_names,
@@ -264,7 +273,8 @@ def evaluate_model(
         tone="success",
     )
     return {
-        "device": device.type,
+        "device": runtime_device.label,
+        "device_reason": runtime_device.reason,
         "accuracy": accuracy,
         "split": val_split,
         "checkpoint_path": str(checkpoint_path),

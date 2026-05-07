@@ -152,7 +152,7 @@ def _configure_scan_parser(parser: argparse.ArgumentParser) -> None:
         "--batch", type=int, default=128, help="batch size for folder processing"
     )
     scan_runtime.add_argument(
-        "--work", type=int, default=0, help="DataLoader worker count"
+        "--work", type=int, default=None, help="DataLoader worker count; default is auto"
     )
 
 
@@ -201,7 +201,7 @@ def _configure_bench_parser(parser: argparse.ArgumentParser) -> None:
         "--batch", type=int, default=128, help="batch size for benchmark processing"
     )
     bench_runtime.add_argument(
-        "--work", type=int, default=0, help="DataLoader worker count"
+        "--work", type=int, default=None, help="DataLoader worker count; default is auto"
     )
 
 
@@ -388,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_runtime = train_parser.add_argument_group("Runtime")
     train_runtime.add_argument(
-        "--work", type=int, default=0, help="dataloader worker count"
+        "--work", type=int, default=None, help="dataloader worker count; default is auto"
     )
     train_runtime.add_argument("--seed", type=int, default=42, help="random seed")
     train_parser.set_defaults(handler=handle_train)
@@ -417,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch", type=int, default=128, help="evaluation batch size"
     )
     val_runtime.add_argument(
-        "--work", type=int, default=0, help="dataloader worker count"
+        "--work", type=int, default=None, help="dataloader worker count; default is auto"
     )
     val_runtime.add_argument(
         "--seed", type=int, default=42, help="seed for sampled visualizations"
@@ -526,7 +526,7 @@ def _validate_external_eval_args(args: argparse.Namespace) -> None:
         raise SystemExit("--top must be at least 1")
     if args.batch < 1:
         raise SystemExit("--batch must be at least 1")
-    if args.work < 0:
+    if args.work is not None and args.work < 0:
         raise SystemExit("--work cannot be negative")
 
 
@@ -568,6 +568,7 @@ def handle_gen(args: argparse.Namespace) -> None:
             ("val_hard", f"{args.vhard:.2f}"),
             ("train_profiles", ",".join(train_profiles) or "default"),
             ("val_profiles", ",".join(val_profiles) or "default"),
+            ("jobs", "auto"),
             ("seed", args.seed),
         ],
     )
@@ -594,6 +595,7 @@ def handle_gen(args: argparse.Namespace) -> None:
             ("images", metadata["total_images"]),
             ("synthetic", metadata["synthetic_total_images"]),
             ("real", metadata["real_total_images"]),
+            ("jobs", metadata["jobs"]),
             ("train/class", metadata["train_per_class"]),
             ("val/class", metadata["val_per_class"]),
             ("val_split", metadata["primary_validation_split"]),
@@ -632,6 +634,8 @@ def handle_train(args: argparse.Namespace) -> None:
     print_summary(
         "Training Summary",
         [
+            ("device", summary["device"]),
+            ("device_reason", summary["device_reason"]),
             ("best_val_acc", format_percent(summary["best_val_acc"])),
             ("best_epoch", summary["best_epoch"]),
             ("val_split", summary["val_split"]),
@@ -668,6 +672,8 @@ def handle_val(args: argparse.Namespace) -> None:
     print_summary(
         "Validation Summary",
         [
+            ("device", summary["device"]),
+            ("device_reason", summary["device_reason"]),
             ("accuracy", format_percent(summary["accuracy"])),
             ("split", summary["split"]),
             ("backbone", summary["backbone_name"]),
@@ -704,6 +710,7 @@ def handle_pred(args: argparse.Namespace) -> None:
         "Prediction Summary",
         [
             ("device", result["device"]),
+            ("device_reason", result["device_reason"]),
             ("backbone", result["backbone_name"]),
             ("temperature", f"{result['temperature']:.4f}"),
             ("checkpoint", display_path(result["checkpoint_path"])),
@@ -746,6 +753,7 @@ def handle_scan(args: argparse.Namespace) -> None:
         "Scan Summary",
         [
             ("device", summary["device"]),
+            ("device_reason", summary["device_reason"]),
             ("backbone", summary["backbone_name"]),
             ("temperature", f"{summary['temperature']:.4f}"),
             ("checkpoint", display_path(summary["checkpoint_path"])),
@@ -787,6 +795,7 @@ def handle_bench(args: argparse.Namespace) -> None:
     )
     summary_rows = [
         ("device", summary["device"]),
+        ("device_reason", summary["device_reason"]),
         ("backbone", summary["backbone_name"]),
         ("temperature", f"{summary['temperature']:.4f}"),
         ("checkpoint", display_path(summary["checkpoint_path"])),

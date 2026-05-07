@@ -15,7 +15,7 @@ from core.checkpoints import (
 )
 from core.constants import CLASS_NAMES, LABEL_DIRS
 from core.datasets import choose_validation_split
-from core.runtime import configure_runtime, prepare_matplotlib
+from core.runtime import configure_runtime, prepare_matplotlib, resolve_runtime_device
 from core.source import get_class_assets, get_texture_paths
 from core.utils import list_image_files
 
@@ -200,19 +200,27 @@ def inspect_runtime() -> dict[str, Any]:
             "message": f"runtime import failed: {exc}",
         }
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    runtime_device = resolve_runtime_device()
     return {
         "status": "ok",
         "message": (
             f"python {sys.version.split()[0]} | "
             f"torch {torch.__version__} | "
-            f"device {device}"
+            f"device {runtime_device.label} | {runtime_device.reason}"
         ),
         "environment": {
             "python": sys.version.split()[0],
             "torch": torch.__version__,
-            "cuda_available": torch.cuda.is_available(),
-            "cuda_version": torch.version.cuda,
+            "device": runtime_device.label,
+            "device_type": runtime_device.type,
+            "device_reason": runtime_device.reason,
+            "cuda_built": runtime_device.cuda_built,
+            "cuda_available": runtime_device.cuda_available,
+            "cuda_version": runtime_device.cuda_version,
+            "cuda_device_count": runtime_device.cuda_device_count,
+            "cuda_name": runtime_device.cuda_name,
+            "mps_built": runtime_device.mps_built,
+            "mps_available": runtime_device.mps_available,
             "platform": platform.platform(),
             "executable": sys.executable,
         },

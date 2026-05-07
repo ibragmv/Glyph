@@ -11,12 +11,6 @@ from core.constants import ALPHABET, LABEL_DIRS
 from core.utils import list_image_files
 
 
-def available_splits(root: Path) -> tuple[str, ...]:
-    if not root.exists():
-        return ()
-    return tuple(sorted(path.name for path in root.iterdir() if path.is_dir()))
-
-
 def read_dataset_metadata(root: Path) -> dict | None:
     metadata_path = root / "metadata.json"
     if not metadata_path.is_file():

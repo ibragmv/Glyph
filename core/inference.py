@@ -21,6 +21,12 @@ from core.checkpoints import (
 )
 from core.console import create_progress, display_path, print_log, print_summary
 from core.datasets import ImageFolderDataset
+from core.runtime import (
+    optimize_model_for_device,
+    prepare_image_batch,
+    resolve_num_workers,
+    resolve_runtime_device,
+)
 from core.utils import ensure_dir, format_float, save_json
 
 
@@ -205,8 +211,9 @@ def predict_image(
     image_path: Path,
     top_k: int = 3,
 ) -> dict:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, checkpoint = load_model_checkpoint(checkpoint_path, device)
+    runtime_device = resolve_runtime_device()
+    model, checkpoint = load_model_checkpoint(checkpoint_path, runtime_device.device)
+    model = optimize_model_for_device(model, runtime_device)
     metadata = checkpoint["metadata"]
     class_names = get_checkpoint_class_names(checkpoint)
     mean, std = get_checkpoint_normalization(checkpoint)
@@ -214,7 +221,10 @@ def predict_image(
 
     array = _read_image_array(image_path)
     transform = build_eval_transforms(mean, std)
-    tensor = transform(image=array)["image"].unsqueeze(0).to(device)
+    tensor = prepare_image_batch(
+        transform(image=array)["image"].unsqueeze(0),
+        runtime_device,
+    )
 
     with torch.no_grad():
         probs = torch.softmax(model(tensor) / temperature, dim=1)
@@ -225,7 +235,8 @@ def predict_image(
         )[0]
 
     return {
-        "device": device.type,
+        "device": runtime_device.label,
+        "device_reason": runtime_device.reason,
         "image_path": str(image_path),
         "checkpoint_path": str(checkpoint_path),
         "backbone_name": metadata["model"]["backbone_name"],
@@ -242,7 +253,7 @@ def predict_folder(
     labels_csv: Path | None = None,
     top_k: int = 3,
     batch_size: int = 128,
-    num_workers: int = 0,
+    num_workers: int | None = None,
     file_column: str = "file",
     label_column: str = "true_label",
     command_name: str = "scan",
@@ -250,8 +261,10 @@ def predict_folder(
     run_context: dict | None = None,
 ) -> dict:
     ensure_dir(output_dir)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, checkpoint = load_model_checkpoint(checkpoint_path, device)
+    runtime_device = resolve_runtime_device()
+    resolved_num_workers = resolve_num_workers(num_workers)
+    model, checkpoint = load_model_checkpoint(checkpoint_path, runtime_device.device)
+    model = optimize_model_for_device(model, runtime_device)
     class_names = get_checkpoint_class_names(checkpoint)
     mean, std = get_checkpoint_normalization(checkpoint)
     temperature = get_checkpoint_temperature(checkpoint)
@@ -275,14 +288,15 @@ def predict_folder(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        num_workers=resolved_num_workers,
+        pin_memory=runtime_device.pin_memory,
     )
 
     print_summary(
         summary_title,
         [
-            ("device", device.type),
+            ("device", runtime_device.label),
+            ("workers", resolved_num_workers),
             ("images", len(dataset)),
             ("checkpoint", display_path(checkpoint_path)),
             ("image_dir", display_path(image_dir)),
@@ -302,7 +316,7 @@ def predict_folder(
             total=len(loader),
         )
         for images, paths in iterator:
-            images = images.to(device, non_blocking=True)
+            images = prepare_image_batch(images, runtime_device)
             probs = torch.softmax(model(images) / temperature, dim=1).cpu()
             batch_predictions = _build_ranked_predictions(
                 probs=probs,
@@ -340,7 +354,7 @@ def predict_folder(
             "num_images": len(rows),
             "top_k": top_k,
             "batch_size": batch_size,
-            "num_workers": num_workers,
+            "num_workers": resolved_num_workers,
             "context": run_context or {},
         },
     )
@@ -376,7 +390,8 @@ def predict_folder(
         )
 
     return {
-        "device": device.type,
+        "device": runtime_device.label,
+        "device_reason": runtime_device.reason,
         "checkpoint_path": str(checkpoint_path),
         "backbone_name": checkpoint["metadata"]["model"]["backbone_name"],
         "temperature": temperature,

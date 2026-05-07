@@ -30,7 +30,14 @@ from core.datasets import (
     choose_validation_split,
 )
 from core.models import DEFAULT_BACKBONE, build_model
-from core.runtime import configure_runtime
+from core.runtime import (
+    RuntimeDevice,
+    configure_runtime,
+    optimize_model_for_device,
+    prepare_image_batch,
+    resolve_num_workers,
+    resolve_runtime_device,
+)
 from core.utils import (
     compute_image_mean_std,
     ensure_dir,
@@ -71,9 +78,11 @@ def format_optional_signed_percentage_points(
 def create_dataloaders(
     data_dir: Path,
     batch_size: int,
-    num_workers: int,
+    num_workers: int | None,
     mean: float,
     std: float,
+    *,
+    runtime_device: RuntimeDevice,
 ) -> tuple[DataLoader, DataLoader, tuple[str, ...], str]:
     train_splits = choose_training_splits(data_dir)
     val_split = choose_validation_split(data_dir)
@@ -97,14 +106,14 @@ def create_dataloaders(
         transform=build_eval_transforms(mean, std),
     )
 
-    pin_memory = torch.cuda.is_available()
+    resolved_num_workers = resolve_num_workers(num_workers)
     loader_kwargs = {
         "batch_size": batch_size,
-        "num_workers": num_workers,
-        "pin_memory": pin_memory,
+        "num_workers": resolved_num_workers,
+        "pin_memory": runtime_device.pin_memory,
         "drop_last": False,
     }
-    if num_workers > 0:
+    if resolved_num_workers > 0:
         loader_kwargs["persistent_workers"] = True
 
     train_loader = DataLoader(
@@ -183,17 +192,17 @@ def apply_temperature(
 def collect_logits_and_labels(
     model: nn.Module,
     loader: DataLoader,
-    device: torch.device,
+    device: RuntimeDevice,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     model.eval()
     logits_chunks: list[torch.Tensor] = []
     label_chunks: list[torch.Tensor] = []
     with torch.no_grad():
         for images, labels in loader:
-            images = images.to(device, non_blocking=True)
+            images = prepare_image_batch(images, device)
             logits = model(images)
             logits_chunks.append(logits.detach())
-            label_chunks.append(labels.to(device))
+            label_chunks.append(labels.to(device.device, non_blocking=device.pin_memory))
     return torch.cat(logits_chunks, dim=0), torch.cat(label_chunks, dim=0)
 
 
@@ -201,14 +210,14 @@ def fit_temperature_scaling(
     *,
     model: nn.Module,
     loader: DataLoader,
-    device: torch.device,
+    device: RuntimeDevice,
     max_iter: int,
 ) -> dict[str, Any]:
     logits, labels = collect_logits_and_labels(model, loader, device)
     before_nll = float(F.cross_entropy(logits, labels).item())
     before_acc = float((logits.argmax(dim=1) == labels).float().mean().item())
 
-    temperature = torch.ones(1, device=device, requires_grad=True)
+    temperature = torch.ones(1, device=device.device, requires_grad=True)
     optimizer = torch.optim.LBFGS(
         [temperature],
         lr=0.1,
@@ -259,7 +268,7 @@ def run_epoch(
     model: nn.Module,
     loader: DataLoader,
     criterion: nn.Module,
-    device: torch.device,
+    device: RuntimeDevice,
     optimizer: Optional[Adam] = None,
     scheduler: Optional[OneCycleLR] = None,
     scaler: Optional[torch.amp.GradScaler] = None,
@@ -276,13 +285,13 @@ def run_epoch(
     sample_count = 0
 
     for images, labels in loader:
-        images = images.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+        images = prepare_image_batch(images, device)
+        labels = labels.to(device.device, non_blocking=device.pin_memory)
 
         if is_train:
             optimizer.zero_grad(set_to_none=True)
 
-        with torch.amp.autocast(device_type=device.type, enabled=device.type == "cuda"):
+        with torch.amp.autocast(device_type=device.type, enabled=device.amp_enabled):
             logits = model(images)
             loss = criterion(logits, labels)
 
@@ -598,7 +607,7 @@ def build_training_metadata(
     model_config: dict[str, Any],
     loss_config: dict[str, Any],
     calibration_config: dict[str, Any],
-    device: torch.device,
+    device: RuntimeDevice,
     mean: float,
     std: float,
     history: dict,
@@ -648,13 +657,20 @@ def build_training_metadata(
             },
         },
         "environment": {
-            "device": device.type,
-            "cuda_available": torch.cuda.is_available(),
-            "cuda_version": torch.version.cuda,
+            "device": device.label,
+            "device_type": device.type,
+            "device_reason": device.reason,
+            "cuda_built": device.cuda_built,
+            "cuda_available": device.cuda_available,
+            "cuda_version": device.cuda_version,
+            "cuda_device_count": device.cuda_device_count,
+            "cuda_name": device.cuda_name,
+            "mps_built": device.mps_built,
+            "mps_available": device.mps_available,
             "torch_version": torch.__version__,
             "python_version": sys.version.split()[0],
             "platform": platform.platform(),
-            "amp_enabled": device.type == "cuda",
+            "amp_enabled": device.amp_enabled,
         },
         "summary": {
             "best_epoch": best_epoch,
@@ -718,7 +734,7 @@ def train_model(
     epochs: int = 30,
     batch_size: int = 128,
     lr: float = 1e-3,
-    num_workers: int = 0,
+    num_workers: int | None = None,
     seed: int = 42,
     pretrained: bool = False,
     small_image_stem: bool = True,
@@ -750,8 +766,7 @@ def train_model(
     mean = format_float(mean)
     std = format_float(std)
 
-    if num_workers < 0:
-        raise ValueError("num_workers must be >= 0")
+    resolved_num_workers = resolve_num_workers(num_workers)
     if not 0.0 <= label_smoothing < 1.0:
         raise ValueError("label_smoothing must be in [0, 1)")
     if dropout < 0.0 or dropout >= 1.0:
@@ -761,22 +776,24 @@ def train_model(
     if temperature_max_iter < 1:
         raise ValueError("temperature_max_iter must be >= 1")
 
+    runtime_device = resolve_runtime_device()
     train_loader, val_loader, train_splits, val_split = create_dataloaders(
         data_dir=data_dir,
         batch_size=batch_size,
-        num_workers=num_workers,
+        num_workers=resolved_num_workers,
         mean=mean,
         std=std,
+        runtime_device=runtime_device,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(
         num_classes=len(CLASS_NAMES),
         dropout=dropout,
         pretrained=pretrained,
         small_image_stem=small_image_stem,
         backbone_name=backbone_name,
-    ).to(device)
+    ).to(runtime_device.device)
+    model = optimize_model_for_device(model, runtime_device)
 
     resolved_small_image_stem = getattr(model, "small_image_stem", small_image_stem)
     model_config = {
@@ -813,7 +830,10 @@ def train_model(
         pct_start=0.3,
         anneal_strategy="cos",
     )
-    scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
+    scaler = torch.amp.GradScaler(
+        runtime_device.type,
+        enabled=runtime_device.amp_enabled,
+    )
 
     history = create_history()
     best_val_acc = 0.0
@@ -831,7 +851,9 @@ def train_model(
     print_summary(
         "Training Run",
         [
-            ("device", device.type),
+            ("device", runtime_device.label),
+            ("device_reason", runtime_device.reason),
+            ("workers", resolved_num_workers),
             ("train", len(train_loader.dataset)),
             ("val", len(val_loader.dataset)),
             ("train_splits", ",".join(train_splits)),
@@ -872,7 +894,7 @@ def train_model(
             model=model,
             loader=train_loader,
             criterion=criterion,
-            device=device,
+            device=runtime_device,
             optimizer=optimizer,
             scheduler=scheduler,
             scaler=scaler,
@@ -885,7 +907,7 @@ def train_model(
             model=model,
             loader=val_loader,
             criterion=criterion,
-            device=device,
+            device=runtime_device,
             overall_progress=overall_progress,
             epoch_progress=epoch_progress,
             total_epochs=epochs,
@@ -966,12 +988,12 @@ def train_model(
             epochs=epochs,
             batch_size=batch_size,
             lr=lr,
-            num_workers=num_workers,
+            num_workers=resolved_num_workers,
             seed=seed,
             model_config=model_config,
             loss_config=loss_config,
             calibration_config=checkpoint_calibration["last"],
-            device=device,
+            device=runtime_device,
             mean=mean,
             std=std,
             history=history,
@@ -1010,18 +1032,22 @@ def train_model(
             pretrained=False,
             small_image_stem=resolved_small_image_stem,
             backbone_name=model_config["backbone_name"],
-        ).to(device)
+        ).to(runtime_device.device)
+        best_calibrated_model = optimize_model_for_device(
+            best_calibrated_model,
+            runtime_device,
+        )
         best_calibrated_model.load_state_dict(best_model_state_dict)
         checkpoint_calibration["best"] = fit_temperature_scaling(
             model=best_calibrated_model,
             loader=val_loader,
-            device=device,
+            device=runtime_device,
             max_iter=temperature_max_iter,
         )
         checkpoint_calibration["last"] = fit_temperature_scaling(
             model=model,
             loader=val_loader,
-            device=device,
+            device=runtime_device,
             max_iter=temperature_max_iter,
         )
         print_log(
@@ -1058,12 +1084,12 @@ def train_model(
         epochs=epochs,
         batch_size=batch_size,
         lr=lr,
-        num_workers=num_workers,
+        num_workers=resolved_num_workers,
         seed=seed,
         model_config=model_config,
         loss_config=loss_config,
         calibration_config=checkpoint_calibration["best"],
-        device=device,
+        device=runtime_device,
         mean=mean,
         std=std,
         history=history,
@@ -1084,12 +1110,12 @@ def train_model(
         epochs=epochs,
         batch_size=batch_size,
         lr=lr,
-        num_workers=num_workers,
+        num_workers=resolved_num_workers,
         seed=seed,
         model_config=model_config,
         loss_config=loss_config,
         calibration_config=checkpoint_calibration["last"],
-        device=device,
+        device=runtime_device,
         mean=mean,
         std=std,
         history=history,
@@ -1126,7 +1152,8 @@ def train_model(
     )
 
     return {
-        "device": device.type,
+        "device": runtime_device.label,
+        "device_reason": runtime_device.reason,
         "best_val_acc": best_val_acc,
         "best_epoch": best_epoch,
         "train_splits": list(train_splits),

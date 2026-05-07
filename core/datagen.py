@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,7 +8,14 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from core.console import create_progress, write_progress_line
-from core.source import build_source_manifest, get_class_assets, get_texture_paths, split_real_paths
+from core.runtime import resolve_num_workers
+from core.source import (
+    ClassAssets,
+    build_source_manifest,
+    get_class_assets,
+    get_texture_paths,
+    split_real_paths,
+)
 from core.utils import ensure_dir, save_json, seed_everything
 
 RESAMPLE_BILINEAR = Image.Resampling.BILINEAR
@@ -42,6 +50,17 @@ class GenerationProfile:
     damage_scale: float
     texture_scale: float
     lighting_scale: float
+
+
+@dataclass(frozen=True)
+class ClassBuildResult:
+    index: int
+    label_dir: str
+    name: str
+    synthetic_count: int
+    real_count: int
+    profile_histogram: dict[str, dict[str, int]]
+    previews: dict[str, dict[str, list[np.ndarray]]]
 
 
 GENERATION_PROFILES = {
@@ -482,6 +501,14 @@ def _make_preview_sheet(images: list[Image.Image]) -> Image.Image:
     return sheet
 
 
+def _preview_image_arrays(images: list[Image.Image]) -> list[np.ndarray]:
+    return [np.asarray(image, dtype=np.uint8) for image in images]
+
+
+def _image_from_array(array: np.ndarray) -> Image.Image:
+    return Image.fromarray(array.astype(np.uint8))
+
+
 def _save_preview_sheets(output_dir: Path, preview_buckets: dict) -> dict:
     preview_dir = ensure_dir(output_dir / "preview")
     preview_paths: dict[str, dict[str, str]] = {}
@@ -494,9 +521,107 @@ def _save_preview_sheets(output_dir: Path, preview_buckets: dict) -> dict:
     return preview_paths
 
 
+def _merge_preview_buckets(
+    preview_buckets: dict[tuple[str, str], list[Image.Image]],
+    preview_payload: dict[str, dict[str, list[np.ndarray]]],
+    limit: int,
+) -> None:
+    for split_name, split_payload in preview_payload.items():
+        for profile_name, arrays in split_payload.items():
+            bucket = preview_buckets[(split_name, profile_name)]
+            if len(bucket) >= limit:
+                continue
+            remaining = limit - len(bucket)
+            bucket.extend(_image_from_array(array) for array in arrays[:remaining])
+
+
+def _build_class_dataset(
+    assets: ClassAssets,
+    config: DataGenConfig,
+    texture_paths: tuple[Path, ...],
+    split_profiles: dict[str, tuple[str, ...]],
+) -> ClassBuildResult:
+    rng = np.random.default_rng(config.seed + assets.index)
+    preview_buckets = {
+        split: {profile_name: [] for profile_name in profile_names}
+        for split, profile_names in split_profiles.items()
+    }
+    profile_histogram = {
+        split: {profile_name: 0 for profile_name in profile_names}
+        for split, profile_names in split_profiles.items()
+    }
+
+    real_split = split_real_paths(
+        assets.real_paths,
+        seed=config.seed + assets.index,
+        val_fraction=config.real_val_fraction,
+    )
+
+    for split_name, paths in real_split.items():
+        for index, source_path in enumerate(paths):
+            image = _prepare_real_image(source_path, config.output_size)
+            out_path = (
+                config.output_dir
+                / split_name
+                / assets.label_dir
+                / f"{assets.label_dir}_{index:04d}.png"
+            )
+            image.save(out_path)
+
+    for split_name, count in (("train", config.train_per_class), ("val", config.val_per_class)):
+        for split_index in range(count):
+            profile = _choose_profile(rng, split_name, split_profiles[split_name])
+            image = render_symbol(
+                alphabet_path=assets.alphabet_path,
+                exemplar_paths=assets.exemplar_paths,
+                real_paths=assets.real_paths,
+                texture_paths=texture_paths,
+                config=config,
+                rng=rng,
+                split=split_name,
+                profile=profile,
+            )
+            out_path = (
+                config.output_dir
+                / split_name
+                / assets.label_dir
+                / f"{assets.label_dir}_{split_index:04d}.png"
+            )
+            image.save(out_path)
+            profile_histogram[split_name][profile.name] += 1
+            if (
+                len(preview_buckets[split_name][profile.name])
+                < config.preview_samples_per_group
+            ):
+                preview_buckets[split_name][profile.name].append(image.copy())
+
+    return ClassBuildResult(
+        index=assets.index,
+        label_dir=assets.label_dir,
+        name=assets.name,
+        synthetic_count=config.train_per_class + config.val_per_class,
+        real_count=len(real_split["realtrain"]) + len(real_split["realval"]),
+        profile_histogram=profile_histogram,
+        previews={
+            split_name: {
+                profile_name: _preview_image_arrays(images)
+                for profile_name, images in split_payload.items()
+                if images
+            }
+            for split_name, split_payload in preview_buckets.items()
+        },
+    )
+
+
+def _resolve_gen_jobs(total_classes: int) -> int:
+    cpu_jobs = resolve_num_workers(None, min_auto_workers=2, max_auto_workers=8)
+    if total_classes <= 1:
+        return 1
+    return max(1, min(total_classes, cpu_jobs))
+
+
 def build_dataset(config: DataGenConfig) -> dict:
     seed_everything(config.seed)
-    rng = np.random.default_rng(config.seed)
     ensure_dir(config.output_dir)
 
     class_assets = get_class_assets()
@@ -532,70 +657,93 @@ def build_dataset(config: DataGenConfig) -> dict:
         total=total_synthetic,
     )
 
-    sample_index = 0
-    for assets in class_assets:
-        real_split = split_real_paths(
-            assets.real_paths,
-            seed=config.seed + assets.index,
-            val_fraction=config.real_val_fraction,
+    jobs = _resolve_gen_jobs(len(class_assets))
+    progress.set_postfix_str(f"classes 0/{len(class_assets)} | jobs {jobs}")
+    progress.refresh()
+
+    completed_classes = 0
+    next_result_index = 0
+    pending_results: dict[int, ClassBuildResult] = {}
+
+    def handle_result(result: ClassBuildResult) -> None:
+        nonlocal completed_classes, next_result_index
+        completed_classes += 1
+        progress.update(result.synthetic_count)
+        for split_name, split_histogram in result.profile_histogram.items():
+            for profile_name, count in split_histogram.items():
+                profile_histogram[split_name][profile_name] += count
+        _merge_preview_buckets(
+            preview_buckets,
+            result.previews,
+            config.preview_samples_per_group,
         )
-
-        for split_name, paths in real_split.items():
-            for index, source_path in enumerate(paths):
-                image = _prepare_real_image(source_path, config.output_size)
-                out_path = (
-                    config.output_dir
-                    / split_name
-                    / assets.label_dir
-                    / f"{assets.label_dir}_{index:04d}.png"
-                )
-                image.save(out_path)
-
-        for split_name, count in (("train", config.train_per_class), ("val", config.val_per_class)):
-            for split_index in range(count):
-                profile = _choose_profile(rng, split_name, split_profiles[split_name])
-                image = render_symbol(
-                    alphabet_path=assets.alphabet_path,
-                    exemplar_paths=assets.exemplar_paths,
-                    real_paths=assets.real_paths,
-                    texture_paths=texture_paths,
-                    config=config,
-                    rng=rng,
-                    split=split_name,
-                    profile=profile,
-                )
-                out_path = (
-                    config.output_dir
-                    / split_name
-                    / assets.label_dir
-                    / f"{assets.label_dir}_{split_index:04d}.png"
-                )
-                image.save(out_path)
-                profile_histogram[split_name][profile.name] += 1
-                if (
-                    len(preview_buckets[(split_name, profile.name)])
-                    < config.preview_samples_per_group
-                ):
-                    preview_buckets[(split_name, profile.name)].append(image.copy())
-                progress.update(1)
-                progress.set_postfix_str(
-                    (
-                        f"class {assets.name} | "
-                        f"split {split_name} | "
-                        f"profile {profile.name}"
-                    ),
-                    refresh=False,
-                )
-                sample_index += 1
-
-        write_progress_line(
-            progress,
+        progress.set_postfix_str(
             (
-                f"gen ready {assets.label_dir} | "
-                f"synthetic {config.train_per_class + config.val_per_class} | "
-                f"real {len(real_split['realtrain']) + len(real_split['realval'])}"
+                f"class {result.name} | "
+                f"classes {completed_classes}/{len(class_assets)} | "
+                f"jobs {jobs}"
             ),
+            refresh=False,
         )
+        pending_results[result.index] = result
+        while next_result_index in pending_results:
+            ready_result = pending_results.pop(next_result_index)
+            write_progress_line(
+                progress,
+                (
+                    f"gen ready {ready_result.label_dir} | "
+                    f"synthetic {ready_result.synthetic_count} | "
+                    f"real {ready_result.real_count}"
+                ),
+            )
+            next_result_index += 1
+
+    if jobs == 1:
+        for assets in class_assets:
+            handle_result(
+                _build_class_dataset(
+                    assets,
+                    config,
+                    texture_paths,
+                    split_profiles,
+                )
+            )
+    else:
+        try:
+            with ProcessPoolExecutor(max_workers=jobs) as executor:
+                futures = [
+                    executor.submit(
+                        _build_class_dataset,
+                        assets,
+                        config,
+                        texture_paths,
+                        split_profiles,
+                    )
+                    for assets in class_assets
+                ]
+                for completed_index, future in enumerate(as_completed(futures), start=1):
+                    result = future.result()
+                    progress.set_postfix_str(
+                        f"classes {completed_index}/{len(class_assets)} | jobs {jobs}",
+                        refresh=False,
+                    )
+                    handle_result(result)
+        except (OSError, PermissionError):
+            jobs = 1
+            completed_classes = 0
+            progress.set_postfix_str(
+                f"classes 0/{len(class_assets)} | jobs {jobs}",
+                refresh=False,
+            )
+            for assets in class_assets:
+                handle_result(
+                    _build_class_dataset(
+                        assets,
+                        config,
+                        texture_paths,
+                        split_profiles,
+                    )
+                )
 
     progress.close()
     preview_sheets = _save_preview_sheets(config.output_dir, preview_buckets)
@@ -614,6 +762,7 @@ def build_dataset(config: DataGenConfig) -> dict:
     )
     metadata = {
         "version": 2,
+        "jobs": jobs,
         "num_classes": len(class_assets),
         "class_names": [assets.name for assets in class_assets],
         "class_titles": [assets.title for assets in class_assets],

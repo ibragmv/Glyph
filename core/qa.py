@@ -12,11 +12,11 @@ def _find_root() -> Path:
     env_root = os.environ.get("GLYPH_ROOT")
     if env_root:
         root = Path(env_root).resolve()
-        if (root / "requirements.txt").is_file() and (root / "core").is_dir():
+        if (root / "pyproject.toml").is_file() and (root / "core").is_dir():
             return root
 
     for candidate in Path(__file__).resolve().parents:
-        if (candidate / "requirements.txt").is_file() and (candidate / "core").is_dir():
+        if (candidate / "pyproject.toml").is_file() and (candidate / "core").is_dir():
             return candidate
 
     raise RuntimeError("Project root could not be resolved for glyph qa.")

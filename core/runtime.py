@@ -13,6 +13,7 @@ import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = PROJECT_ROOT / ".cache"
+_RUNTIME_CONFIGURED = False
 _IGNORED_WARNING_PATTERNS = (
     "Matplotlib is building the font cache; this may take a moment.",
     r"Error fetching version info .*",
@@ -67,22 +68,28 @@ def _show_runtime_warning(
 
 
 def configure_runtime() -> None:
+    global _RUNTIME_CONFIGURED
+
     matplotlib_cache = CACHE_DIR / "matplotlib"
     matplotlib_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
     os.environ.setdefault("MPLBACKEND", "Agg")
     os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
-    warnings.showwarning = _show_runtime_warning
+    if _RUNTIME_CONFIGURED:
+        return
+
+    warnings.simplefilter("default")
     for pattern in _IGNORED_WARNING_PATTERNS:
         warnings.filterwarnings("ignore", message=pattern)
-    warnings.simplefilter("default")
+    warnings.showwarning = _show_runtime_warning
     torch.set_float32_matmul_precision("high")
     if torch.backends.cudnn.is_available():
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.allow_tf32 = True
     if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
         torch.backends.cuda.matmul.allow_tf32 = True
+    _RUNTIME_CONFIGURED = True
 
 
 def prepare_matplotlib() -> None:

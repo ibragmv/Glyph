@@ -93,6 +93,14 @@ External folder benchmark:
 ./glyph qa
 ```
 
+For development and local verification, `make glyph` is the only bootstrap step:
+
+```bash
+make glyph
+python -m pytest -q
+python -m core qa
+```
+
 ## License
 
 MIT

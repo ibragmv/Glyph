@@ -1,7 +1,8 @@
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py", "smoke.py"]
+python_files = ["test_*.py", "*_test.py", "smoke.py", "runtime.py", "launcher.py"]
+pythonpath = ["."]
 markers = [
     "smoke: fast smoke coverage for CLI, dataset generation, checkpoint loading, and inference",
 ]

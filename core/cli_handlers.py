@@ -385,7 +385,7 @@ def handle_smoke(args: argparse.Namespace) -> None:
 
 def handle_qa(args: argparse.Namespace) -> None:
     del args
-    print_banner("glyph qa", "fast verification")
+    print_banner("glyph qa", "project verification")
     from core.qa import run_qa
 
     run_qa()

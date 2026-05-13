@@ -93,6 +93,9 @@ External folder benchmark:
 ./glyph qa
 ```
 
+`glyph smoke` runs the smoke marker only.
+`glyph qa` runs lint, syntax, and the full pytest suite.
+
 For development and local verification, `make glyph` is the only bootstrap step:
 
 ```bash

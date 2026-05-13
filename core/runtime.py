@@ -4,6 +4,7 @@ import io
 import importlib
 import os
 import warnings
+from contextlib import contextmanager
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,38 +52,31 @@ class RuntimeDevice:
         return self.type == "cuda"
 
 
-def _show_runtime_warning(
-    message: warnings.WarningMessage | str,
-    category,
-    filename: str,
-    lineno: int,
-    file=None,
-    line=None,
-) -> None:
-    from core.console import print_warning
-
-    category_name = getattr(category, "__name__", "Warning")
-    if category_name == "PyparsingDeprecationWarning":
-        return
-    print_warning(f"{category_name}: {message}")
-
-
-def configure_runtime() -> None:
-    global _RUNTIME_CONFIGURED
-
+def prepare_runtime_environment() -> None:
     matplotlib_cache = CACHE_DIR / "matplotlib"
     matplotlib_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
     os.environ.setdefault("MPLBACKEND", "Agg")
     os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
+
+@contextmanager
+def runtime_warning_context():
+    with warnings.catch_warnings():
+        warnings.simplefilter("default")
+        for pattern in _IGNORED_WARNING_PATTERNS:
+            warnings.filterwarnings("ignore", message=pattern)
+        yield
+
+
+def configure_runtime() -> None:
+    global _RUNTIME_CONFIGURED
+
+    prepare_runtime_environment()
+
     if _RUNTIME_CONFIGURED:
         return
 
-    warnings.simplefilter("default")
-    for pattern in _IGNORED_WARNING_PATTERNS:
-        warnings.filterwarnings("ignore", message=pattern)
-    warnings.showwarning = _show_runtime_warning
     torch.set_float32_matmul_precision("high")
     if torch.backends.cudnn.is_available():
         torch.backends.cudnn.benchmark = True
@@ -93,12 +87,14 @@ def configure_runtime() -> None:
 
 
 def prepare_matplotlib() -> None:
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        matplotlib = importlib.import_module("matplotlib")
-        matplotlib.use("Agg", force=True)
-        from matplotlib import font_manager
+    prepare_runtime_environment()
+    with runtime_warning_context():
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            matplotlib = importlib.import_module("matplotlib")
+            matplotlib.use("Agg", force=True)
+            from matplotlib import font_manager
 
-        font_manager.findSystemFonts()
+            font_manager.findSystemFonts()
 
 
 def resolve_runtime_device() -> RuntimeDevice:

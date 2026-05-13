@@ -5,7 +5,7 @@ import sys
 import traceback
 from core.cli_parser import build_parser
 from core.console import print_error, print_log, print_warning
-from core.runtime import configure_runtime
+from core.runtime import configure_runtime, runtime_warning_context
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -13,8 +13,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = parser.parse_args(raw_argv)
-        args.handler(args)
+        with runtime_warning_context():
+            args = parser.parse_args(raw_argv)
+            args.handler(args)
     except KeyboardInterrupt:
         print_warning("Execution interrupted.")
         raise SystemExit(130)

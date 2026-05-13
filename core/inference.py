@@ -23,6 +23,7 @@ from core.checkpoints import (
 from core.console import create_progress, display_path, print_log, print_summary
 from core.datasets import ImageFolderDataset
 from core.runtime import (
+    configure_runtime,
     optimize_model_for_device,
     prepare_image_batch,
     resolve_num_workers,
@@ -215,6 +216,7 @@ def predict_image(
     image_path: Path,
     top_k: int = 3,
 ) -> dict:
+    configure_runtime()
     runtime_device = resolve_runtime_device()
     model, checkpoint = load_model_checkpoint(checkpoint_path, runtime_device.device)
     model = optimize_model_for_device(model, runtime_device)
@@ -265,6 +267,7 @@ def predict_folder(
     summary_title: str = "Folder Scan",
     run_context: dict | None = None,
 ) -> dict:
+    configure_runtime()
     ensure_dir(output_dir)
     runtime_device = resolve_runtime_device()
     resolved_num_workers = resolve_num_workers(num_workers)

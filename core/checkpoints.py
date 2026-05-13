@@ -1,11 +1,56 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import torch
 
 from core.models import build_model
+
+
+def _validated_mapping(value: Any, *, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Checkpoint {name} must be a mapping.")
+    return value
+
+
+def _validate_model_state_dict(value: Any) -> Mapping[str, torch.Tensor]:
+    state_dict = _validated_mapping(value, name="model_state_dict")
+    if not state_dict:
+        raise ValueError("Checkpoint model_state_dict is empty.")
+
+    for key, tensor in state_dict.items():
+        if not isinstance(key, str):
+            raise ValueError("Checkpoint model_state_dict keys must be strings.")
+        if not isinstance(tensor, torch.Tensor):
+            raise ValueError(
+                "Checkpoint model_state_dict values must be torch.Tensor instances."
+            )
+    return state_dict
+
+
+def _validate_checkpoint_payload(payload: Any) -> dict[str, Any]:
+    checkpoint = dict(_validated_mapping(payload, name="payload"))
+    checkpoint["model_state_dict"] = _validate_model_state_dict(
+        checkpoint.get("model_state_dict")
+    )
+    checkpoint["metadata"] = dict(
+        _validated_mapping(checkpoint.get("metadata"), name="metadata")
+    )
+
+    model_metadata = dict(
+        _validated_mapping(checkpoint["metadata"].get("model"), name="metadata.model")
+    )
+    dataset_metadata = dict(
+        _validated_mapping(
+            checkpoint["metadata"].get("dataset"),
+            name="metadata.dataset",
+        )
+    )
+    checkpoint["metadata"]["model"] = model_metadata
+    checkpoint["metadata"]["dataset"] = dataset_metadata
+    return checkpoint
 
 
 def get_checkpoint_metadata(checkpoint: dict[str, Any]) -> dict[str, Any]:
@@ -76,11 +121,16 @@ def build_model_from_checkpoint(
 def load_model_checkpoint(
     checkpoint_path: Path, device: torch.device
 ) -> tuple[torch.nn.Module, dict[str, Any]]:
-    checkpoint = torch.load(
-        checkpoint_path,
-        map_location=device,
-        weights_only=False,
-    )
+    try:
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=device,
+            weights_only=True,
+        )
+    except Exception as exc:
+        raise ValueError(f"Checkpoint could not be read safely: {exc}") from exc
+
+    checkpoint = _validate_checkpoint_payload(checkpoint)
     checkpoint["metadata"] = get_checkpoint_metadata(checkpoint)
     model = build_model_from_checkpoint(checkpoint, device)
     return model, checkpoint

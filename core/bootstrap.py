@@ -1,33 +1,57 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Iterable
 
 
-RUNTIME_DEPENDENCIES: tuple[str, ...] = (
-    "numpy>=1.26",
-    "Pillow>=10.3",
-    "matplotlib>=3.8",
-    "seaborn>=0.13",
-    "scikit-learn>=1.5",
-    "tqdm>=4.66",
-    "opencv-python-headless>=4.10",
-    "albumentations>=1.4",
-    "torch>=2.3",
-    "torchvision>=0.18",
-)
-
-DEV_DEPENDENCIES: tuple[str, ...] = (
-    "pytest>=8.3",
-    "ruff>=0.6",
-)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
+DEPENDENCY_MANIFESTS: tuple[Path, ...] = (PROJECT_ROOT / "pyproject.toml",)
 
 
-def bootstrap_dependencies() -> tuple[str, ...]:
-    return RUNTIME_DEPENDENCIES + DEV_DEPENDENCIES
+def _load_toml_module():
+    try:
+        import tomllib
+
+        return tomllib
+    except ModuleNotFoundError:
+        pass
+
+    try:
+        import tomli
+
+        return tomli
+    except ModuleNotFoundError:
+        pass
+
+    from pip._vendor import tomli
+
+    return tomli
 
 
-def dependency_manifest_hash(lines: Iterable[str] | None = None) -> str:
-    manifest_lines = tuple(bootstrap_dependencies() if lines is None else lines)
-    payload = "\n".join(manifest_lines).encode("utf-8")
+def _read_pyproject() -> dict[str, Any]:
+    toml = _load_toml_module()
+    with PYPROJECT_PATH.open("rb") as fp:
+        return toml.load(fp)
+
+
+def bootstrap_dependencies(*, include_dev: bool = True) -> tuple[str, ...]:
+    payload = _read_pyproject()
+    project = payload.get("project", {})
+    runtime_dependencies = tuple(project.get("dependencies", []))
+    optional_dependencies = project.get("optional-dependencies", {})
+    dev_dependencies = tuple(optional_dependencies.get("dev", []))
+    return runtime_dependencies + (dev_dependencies if include_dev else ())
+
+
+def dependency_manifest_hash(paths: Iterable[Path] | None = None) -> str:
+    manifest_paths = tuple(DEPENDENCY_MANIFESTS if paths is None else paths)
+    payload = bytearray()
+    for path in manifest_paths:
+        resolved_path = Path(path).resolve()
+        payload.extend(str(resolved_path).encode("utf-8"))
+        payload.extend(b"\0")
+        payload.extend(resolved_path.read_bytes())
+        payload.extend(b"\0")
     return hashlib.sha256(payload).hexdigest()

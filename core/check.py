@@ -22,7 +22,12 @@ from core.constants import (
     VAL_SPLIT,
 )
 from core.datasets import choose_validation_split
-from core.runtime import configure_runtime, prepare_matplotlib, resolve_runtime_device
+from core.runtime import (
+    configure_runtime,
+    prepare_matplotlib,
+    resolve_runtime_device,
+    runtime_warning_context,
+)
 from core.source import get_class_assets, get_texture_paths
 from core.utils import list_image_files
 
@@ -214,13 +219,14 @@ def inspect_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
 def inspect_runtime() -> dict[str, Any]:
     configure_runtime()
     try:
-        import albumentations  # noqa: F401
-        import matplotlib  # noqa: F401
-        import PIL  # noqa: F401
-        import sklearn  # noqa: F401
-        import torchvision  # noqa: F401
+        with runtime_warning_context():
+            import albumentations  # noqa: F401
+            import matplotlib  # noqa: F401
+            import PIL  # noqa: F401
+            import sklearn  # noqa: F401
+            import torchvision  # noqa: F401
 
-        prepare_matplotlib()
+            prepare_matplotlib()
     except Exception as exc:
         return {
             "status": "fail",

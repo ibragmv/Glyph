@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  smoke:
+  qa:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: make glyph
 
-      - name: Smoke checks
+      - name: QA checks
         env:
           PYTHONPYCACHEPREFIX: .cache/pycache
         run: ./glyph qa

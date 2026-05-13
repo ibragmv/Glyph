@@ -65,16 +65,20 @@ def run_smoke() -> None:
     _run_step("smoke", [sys.executable, "-m", "pytest", "-m", "smoke"], env=_qa_env())
 
 
+def run_tests() -> None:
+    _run_step("tests", [sys.executable, "-m", "pytest"], env=_qa_env())
+
+
 def run_qa() -> None:
     print_summary(
         "QA Summary",
         [
             ("python", sys.executable),
             ("root", ROOT_DIR),
-            ("steps", "lint, syntax, smoke"),
+            ("steps", "lint, syntax, tests"),
         ],
     )
     run_lint()
     run_syntax()
-    run_smoke()
+    run_tests()
     print_log("qa", "all checks passed", tone="success")

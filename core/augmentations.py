@@ -1,11 +1,24 @@
 from __future__ import annotations
 
-import os
+import importlib
+from typing import Any
 
-os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+from core.runtime import prepare_runtime_environment
 
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
+_AUGMENTATIONS: tuple[Any, Any] | None = None
+
+
+def _load_augmentations() -> tuple[Any, Any]:
+    global _AUGMENTATIONS
+
+    if _AUGMENTATIONS is not None:
+        return _AUGMENTATIONS
+
+    prepare_runtime_environment()
+    albumentations = importlib.import_module("albumentations")
+    transforms_module = importlib.import_module("albumentations.pytorch")
+    _AUGMENTATIONS = (albumentations, transforms_module.ToTensorV2)
+    return _AUGMENTATIONS
 
 
 RGB_FILL = (255, 255, 255)
@@ -14,7 +27,8 @@ RGB_FILL = (255, 255, 255)
 def build_train_transforms(
     mean: tuple[float, float, float],
     std: tuple[float, float, float],
-) -> A.Compose:
+) -> object:
+    A, ToTensorV2 = _load_augmentations()
     return A.Compose(
         [
             A.GaussNoise(std_range=(0.04, 0.12), mean_range=(0.0, 0.0), p=0.55),
@@ -84,7 +98,8 @@ def build_train_transforms(
 def build_eval_transforms(
     mean: tuple[float, float, float],
     std: tuple[float, float, float],
-) -> A.Compose:
+) -> object:
+    A, ToTensorV2 = _load_augmentations()
     return A.Compose(
         [
             A.Normalize(mean=mean, std=std, max_pixel_value=255.0),

@@ -1,7 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glyph"
+version = "0.1.0"
+description = "CLI for classifying printed Aramaic letters from RGB images."
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.26",
+    "Pillow>=10.3",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "scikit-learn>=1.5",
+    "tqdm>=4.66",
+    "opencv-python-headless>=4.10",
+    "albumentations>=1.4",
+    "torch>=2.3",
+    "torchvision>=0.18",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[tool.setuptools]
+packages = ["core"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py", "smoke.py", "runtime.py", "launcher.py"]
+python_files = ["test_*.py", "*_test.py", "smoke.py", "runtime.py", "launcher.py", "guard.py"]
 pythonpath = ["."]
 markers = [
     "smoke: fast smoke coverage for CLI, dataset generation, checkpoint loading, and inference",

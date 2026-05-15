@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from torch.serialization import safe_globals
+from torch.torch_version import TorchVersion
 
 from core.models import build_model
 
@@ -122,11 +124,12 @@ def load_model_checkpoint(
     checkpoint_path: Path, device: torch.device
 ) -> tuple[torch.nn.Module, dict[str, Any]]:
     try:
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location=device,
-            weights_only=True,
-        )
+        with safe_globals([TorchVersion]):
+            checkpoint = torch.load(
+                checkpoint_path,
+                map_location=device,
+                weights_only=True,
+            )
     except Exception as exc:
         raise ValueError(f"Checkpoint could not be read safely: {exc}") from exc
 

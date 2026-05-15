@@ -5,8 +5,9 @@ import re
 import shutil
 import sys
 import textwrap
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from tqdm.auto import tqdm
 
@@ -245,6 +246,76 @@ def display_path(path: Path | str) -> str:
     return path_text(Path(path))
 
 
+def _format_progress_interval(seconds: float | None) -> str:
+    if seconds is None:
+        return "??:??"
+    total_seconds = max(0, int(round(seconds)))
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _default_estimated_total_seconds(
+    progress,
+    *,
+    base_format_dict: dict[str, Any],
+) -> float | None:
+    total = getattr(progress, "total", None)
+    if total in (None, 0):
+        return None
+
+    completed = float(getattr(progress, "n", 0))
+    if completed <= 0:
+        return None
+
+    elapsed = float(base_format_dict.get("elapsed", 0.0) or 0.0)
+    if elapsed <= 0:
+        return None
+    return elapsed * (float(total) / completed)
+
+
+class GlyphProgress(tqdm):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._glyph_refresh_stop = threading.Event()
+        self._glyph_refresh_thread: threading.Thread | None = None
+        if not self.disable:
+            self._glyph_refresh_thread = threading.Thread(
+                target=self._glyph_refresh_loop,
+                name="glyph-progress-refresh",
+                daemon=True,
+            )
+            self._glyph_refresh_thread.start()
+
+    def _glyph_refresh_loop(self) -> None:
+        while not self._glyph_refresh_stop.wait(0.2):
+            try:
+                self.refresh()
+            except Exception:
+                break
+
+    @property
+    def format_dict(self) -> dict[str, Any]:
+        data = dict(super().format_dict)
+        estimate_hook = getattr(self, "_glyph_estimate_total_fn", None)
+        estimated_total = (
+            estimate_hook(self)
+            if callable(estimate_hook)
+            else _default_estimated_total_seconds(self, base_format_dict=data)
+        )
+        data["estimated_total"] = _format_progress_interval(estimated_total)
+        return data
+
+    def close(self) -> None:
+        self._glyph_refresh_stop.set()
+        refresh_thread = self._glyph_refresh_thread
+        if refresh_thread is not None and refresh_thread.is_alive():
+            refresh_thread.join(timeout=0.3)
+        super().close()
+
+
 def create_progress(
     iterable=None,
     *,
@@ -255,7 +326,7 @@ def create_progress(
     total: Optional[int] = None,
     position: int = 0,
 ):
-    return tqdm(
+    return GlyphProgress(
         iterable,
         total=total,
         disable=not _supports_progress(),
@@ -266,7 +337,7 @@ def create_progress(
         desc=f"› {command} {scope}",
         bar_format=(
             "{desc:<22} {bar:18} "
-            "{percentage:3.0f}% | {n_fmt}/{total_fmt} | {elapsed}<{remaining} | {postfix}"
+            "{percentage:3.0f}% | {n_fmt}/{total_fmt} | {elapsed}<{estimated_total} | {postfix}"
         ),
     )
 
